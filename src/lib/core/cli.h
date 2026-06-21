@@ -32,6 +32,12 @@ int tokenize(char* line, char** argv, int maxArgs);
 // 見つかればその添字、見つからなければ -1 を返す。
 int findCommand(const Command* table, int count, const char* name);
 
+// 文字列 s を10進整数として「厳密に」解析する。
+// 許可するのは先頭の任意符号(+/-)と数字のみ。空文字・符号のみ・数字以外を含む場合は
+// 解析失敗として false を返す（atoi と異なり "foo" や "12a" を 0/12 と誤認しない）。
+// 成功時は true を返し out に値を格納する。
+bool parseInt(const char* s, int& out);
+
 }  // namespace cli
 
 #endif  // CORE_CLI_H

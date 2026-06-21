@@ -64,9 +64,9 @@ static int cmd_led(int argc, char** argv) {
     Serial.println("usage: led <0-3> <on|off>");
     return -1;
   }
-  int idx = atoi(argv[1]);
-  if (idx < 0 || idx > 3) {
-    Serial.println("LED index は 0-3");
+  int idx;
+  if (!cli::parseInt(argv[1], idx) || idx < 0 || idx > 3) {
+    Serial.println("LED index は 0-3 の数値");
     return -1;
   }
   bool on = (strcmp(argv[2], "on") == 0);
@@ -95,9 +95,9 @@ static int cmd_beep(int argc, char** argv) {
     Serial.println("usage: beep <freq_hz> <ms>");
     return -1;
   }
-  int freq = atoi(argv[1]);
-  int ms = atoi(argv[2]);
-  if (freq <= 0 || ms <= 0) {
+  int freq;
+  int ms;
+  if (!cli::parseInt(argv[1], freq) || !cli::parseInt(argv[2], ms) || freq <= 0 || ms <= 0) {
     Serial.println("freq/ms は正の整数");
     return -1;
   }

@@ -92,3 +92,32 @@ TEST_CASE("findCommand: 大文字小文字は区別する") {
   CHECK(cli::findCommand(table, 1, "HELP") == -1);
   CHECK(cli::findCommand(table, 1, "help") == 0);
 }
+
+TEST_CASE("parseInt: 正常な整数を解析する") {
+  int v = -999;
+  CHECK(cli::parseInt("0", v));
+  CHECK(v == 0);
+  CHECK(cli::parseInt("123", v));
+  CHECK(v == 123);
+  CHECK(cli::parseInt("-5", v));
+  CHECK(v == -5);
+  CHECK(cli::parseInt("+7", v));
+  CHECK(v == 7);
+}
+
+TEST_CASE("parseInt: 非数値・空・符号のみは失敗する") {
+  int v = 42;
+  CHECK_FALSE(cli::parseInt("", v));
+  CHECK_FALSE(cli::parseInt("foo", v));
+  CHECK_FALSE(cli::parseInt("12a", v));  // 末尾に非数字
+  CHECK_FALSE(cli::parseInt("1 2", v));  // 途中に空白
+  CHECK_FALSE(cli::parseInt("-", v));    // 符号のみ
+  CHECK_FALSE(cli::parseInt("+", v));    // 符号のみ
+  CHECK_FALSE(cli::parseInt(nullptr, v));
+  CHECK(v == 42);  // 失敗時は out を書き換えない
+}
+
+TEST_CASE("parseInt: atoi と違い 'led foo' の foo を 0 と誤認しない") {
+  int v = -1;
+  CHECK_FALSE(cli::parseInt("foo", v));  // atoi なら 0 になるが parseInt は失敗
+}
