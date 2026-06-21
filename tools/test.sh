@@ -25,4 +25,6 @@ echo "==> build"
 cmake --build "${BUILD_DIR}"
 
 echo "==> ctest"
-ctest --test-dir "${BUILD_DIR}" --output-on-failure "$@"
+# ctest の --test-dir は CTest 3.20+ でのみ利用可能。古い ctest でも動くよう
+# サブシェルでビルドディレクトリに入って実行する（互換性優先）。
+( cd "${BUILD_DIR}" && ctest --output-on-failure "$@" )
