@@ -37,11 +37,11 @@ static void setOnly(int index) {
 void setup() {
   Serial.begin(115200);
 
-  // USB CDC のシリアル接続を最大2秒待つ。未接続でも動作は継続する。
-  unsigned long start = millis();
-  while (!Serial && (millis() - start) < 2000) {
-    ; // wait for serial
-  }
+  // 注: Spresense の Serial は USB-UART(CP210x)で、シリアルモニタの接続有無を
+  //     検知できない（!Serial で待っても即座に抜ける）。そのため書き込み直後は
+  //     モニタを開く前に起動バナーが流れ得る。バナーを先頭から見たい場合は、
+  //     モニタを開いてからボードをリセットする（doc/development/spresense_setup.md §8）。
+  delay(500);  // 起動直後の出力安定待ち
 
   for (int i = 0; i < LED_COUNT; i++) {
     pinMode(LED_PINS[i], OUTPUT);
