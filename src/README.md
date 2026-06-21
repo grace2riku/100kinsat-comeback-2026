@@ -33,11 +33,15 @@ HW非依存層（`core`）と HW依存層（`hal`）を分離する。
 - Arduino IDE はスケッチを「フォルダ名と同名の `.ino`」で管理する（例: `blink_led/blink_led.ino`）。
 - シリアルのボーレートは全スケッチ **115200 bps** で統一する。
 
-## ビルド
+## ビルド・書き込み・モニタ（arduino-cli）
 
-- コマンドラインビルド（arduino-cli）: [doc/development/build_arduino_cli.md](../doc/development/build_arduino_cli.md)
-  ```bash
-  tools/build.sh src/blink_led
-  tools/build.sh src/flight
-  ```
-- IDE での書き込み・実機確認: [doc/development/spresense_setup.md](../doc/development/spresense_setup.md)
+手順: [doc/development/build_arduino_cli.md](../doc/development/build_arduino_cli.md)
+
+```bash
+tools/build.sh   src/blink_led   # ビルド（コンパイルのみ）
+tools/upload.sh  src/blink_led   # ビルド＋書き込み（ポート自動検出）
+tools/monitor.sh                 # シリアルモニタ 115200bps
+```
+
+- 書き込みはブートローダ導入済みが前提（初回のみ IDE。[spresense_setup.md §4](../doc/development/spresense_setup.md)）。それ以降は IDE 不要。
+- IDE での書き込み・実機確認手順: [doc/development/spresense_setup.md](../doc/development/spresense_setup.md)
