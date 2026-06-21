@@ -1,5 +1,6 @@
 #include "cli.h"
 
+#include <climits>
 #include <cstring>
 
 namespace {
@@ -54,15 +55,29 @@ bool parseInt(const char* s, int& out) {
   if (*p == '\0') {
     return false;  // 符号のみは不可
   }
-  long val = 0;
+  // int の範囲で直接累積し、各桁でオーバーフローを検査する。
+  // （Spresense では long も 32bit のため long 経由では防げない。負値は INT_MIN を
+  //   正しく扱うため下向きに累積する。）
+  int result = 0;
   while (*p != '\0') {
     if (*p < '0' || *p > '9') {
       return false;  // 数字以外を含む
     }
-    val = val * 10 + (*p - '0');
+    int digit = *p - '0';
+    if (neg) {
+      if (result < (INT_MIN + digit) / 10) {
+        return false;  // 下限を下回る
+      }
+      result = result * 10 - digit;
+    } else {
+      if (result > (INT_MAX - digit) / 10) {
+        return false;  // 上限を超える
+      }
+      result = result * 10 + digit;
+    }
     p++;
   }
-  out = static_cast<int>(neg ? -val : val);
+  out = result;
   return true;
 }
 

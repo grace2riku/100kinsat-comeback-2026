@@ -121,3 +121,19 @@ TEST_CASE("parseInt: atoi と違い 'led foo' の foo を 0 と誤認しない")
   int v = -1;
   CHECK_FALSE(cli::parseInt("foo", v));  // atoi なら 0 になるが parseInt は失敗
 }
+
+TEST_CASE("parseInt: int の境界値ちょうどは受理する") {
+  int v = 0;
+  CHECK(cli::parseInt("2147483647", v));  // INT_MAX
+  CHECK(v == 2147483647);
+  CHECK(cli::parseInt("-2147483648", v));  // INT_MIN
+  CHECK(v == -2147483648);
+}
+
+TEST_CASE("parseInt: int 範囲を超える値は拒否する（オーバーフロー対策）") {
+  int v = 123;
+  CHECK_FALSE(cli::parseInt("2147483648", v));   // INT_MAX + 1
+  CHECK_FALSE(cli::parseInt("-2147483649", v));  // INT_MIN - 1
+  CHECK_FALSE(cli::parseInt("99999999999", v));  // 桁あふれ
+  CHECK(v == 123);                               // 失敗時は out を書き換えない
+}
