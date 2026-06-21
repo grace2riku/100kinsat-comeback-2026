@@ -16,14 +16,12 @@ constexpr double kEarthRadiusMeters = 6371000.0;
 
 // 2点間の大圏距離 [m]（haversine 公式）。
 // 引数は度 [deg]。同一点なら 0 を返す。距離は向きに依らず対称。
-double distanceMeters(double lat1Deg, double lon1Deg,
-                      double lat2Deg, double lon2Deg);
+double distanceMeters(double lat1Deg, double lon1Deg, double lat2Deg, double lon2Deg);
 
 // 起点(1)から目標(2)への初期方位 [deg]。
 // 北=0、東=90、時計回り。戻り値は 0 <= θ < 360 に正規化する。
 // 同一点の場合は 0 を返す。
-double bearingDegrees(double lat1Deg, double lon1Deg,
-                      double lat2Deg, double lon2Deg);
+double bearingDegrees(double lat1Deg, double lon1Deg, double lat2Deg, double lon2Deg);
 
 }  // namespace geo
 

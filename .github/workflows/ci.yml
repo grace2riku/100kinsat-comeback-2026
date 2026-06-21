@@ -1,0 +1,91 @@
+name: CI
+
+# push(main) と Pull Request で実行。PR ブランチへの push と PR の二重起動を避けるため
+# push は main のみに限定する。
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 同一 PR/ブランチで新しい push があれば古い実行をキャンセルする
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # HW非依存ロジック(src/lib/core)のホストユニットテスト（cmake + ctest + doctest）
+  # ---------------------------------------------------------------------------
+  host-test:
+    name: Host unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show toolchain
+        run: cmake --version && ctest --version && c++ --version
+      - name: Run host tests
+        run: tools/test.sh
+
+  # ---------------------------------------------------------------------------
+  # 静的解析・整形チェック（clang-format / cppcheck）
+  # 対象は純粋C++（src/lib・test）。Arduino .ino と同梱 doctest は対象外。
+  # ---------------------------------------------------------------------------
+  lint:
+    name: Static analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang-format (pip, ローカルとバージョン一致)
+        run: pipx install clang-format==22.1.5
+      - name: Install cppcheck
+        run: sudo apt-get update && sudo apt-get install -y cppcheck
+      - name: clang-format (check only)
+        run: |
+          files=$(find src/lib test -type f \( -name '*.h' -o -name '*.cpp' \) \
+            -not -path 'test/vendor/*')
+          echo "対象ファイル:"; echo "$files"
+          clang-format --version
+          clang-format --dry-run --Werror $files
+      - name: cppcheck (core)
+        run: |
+          cppcheck --version
+          cppcheck --enable=warning,performance,portability \
+            --error-exitcode=1 --std=c++17 --language=c++ \
+            --suppress=missingInclude --suppress=missingIncludeSystem \
+            --inline-suppr \
+            src/lib/core
+
+  # ---------------------------------------------------------------------------
+  # Spresense 向けスケッチのビルド（arduino-cli）。書き込みはしない（compileのみ）。
+  # ---------------------------------------------------------------------------
+  arduino-build:
+    name: Arduino build (Spresense)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup arduino-cli
+        uses: arduino/setup-arduino-cli@v2
+      - name: Cache Spresense core
+        uses: actions/cache@v4
+        with:
+          path: ~/.arduino15
+          key: arduino-spresense-${{ runner.os }}-v1
+      - name: Install Spresense core
+        run: |
+          arduino-cli config init --overwrite
+          arduino-cli config add board_manager.additional_urls \
+            https://github.com/sonydevworld/spresense-arduino-compatible/releases/download/generic/package_spresense_index.json
+          # 配布サーバの過渡的エラー(例: 500)に備えてリトライする
+          for i in 1 2 3 4 5; do
+            arduino-cli core update-index && arduino-cli core install SPRESENSE:spresense && break
+            echo "::warning::Spresense コア導入に失敗 (試行 $i)。リトライします..."
+            sleep 20
+          done
+          arduino-cli core list
+          # リトライしても入らなければ明示的に失敗させる
+          arduino-cli core list | grep -q "SPRESENSE:spresense" \
+            || { echo "::error::Spresense コア導入に失敗しました"; exit 1; }
+      - name: Build sketches
+        run: |
+          tools/build.sh src/blink_led
+          tools/build.sh src/flight
