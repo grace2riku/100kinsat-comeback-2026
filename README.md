@@ -18,6 +18,7 @@ push(main) / Pull Request で以下を自動実行する（[ワークフロー](
 
 - 開発環境（IDE・書き込み・実機確認）: [doc/development/spresense_setup.md](doc/development/spresense_setup.md)
 - CLIビルド・書き込み・モニタ・clangd: [doc/development/build_arduino_cli.md](doc/development/build_arduino_cli.md)
+- オンターゲット試験シェル（NT-Shell）: [doc/development/serial_shell.md](doc/development/serial_shell.md)
 - ソース構成・層分け: [src/README.md](src/README.md)
 - ホストテスト方針: [test/README.md](test/README.md)
 

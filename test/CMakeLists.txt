@@ -15,3 +15,4 @@ function(add_core_test name)
 endfunction()
 
 add_core_test(test_geo core/test_geo.cpp)
+add_core_test(test_cli core/test_cli.cpp)
