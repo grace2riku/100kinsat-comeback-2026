@@ -27,5 +27,10 @@ if [ ! -d "${REPO_ROOT}/${SKETCH}" ]; then
 fi
 
 echo "==> build: ${SKETCH}  (FQBN=${FQBN})"
-arduino-cli compile --fqbn "${FQBN}" --warnings all "${REPO_ROOT}/${SKETCH}"
+# --libraries: 同梱ライブラリ(libraries/ntshell)と自前モジュール(src/lib/core 等)の
+#              探索パスを追加する。使わないスケッチには影響しない。
+arduino-cli compile --fqbn "${FQBN}" --warnings all \
+  --libraries "${REPO_ROOT}/libraries" \
+  --libraries "${REPO_ROOT}/src/lib" \
+  "${REPO_ROOT}/${SKETCH}"
 echo "==> OK"

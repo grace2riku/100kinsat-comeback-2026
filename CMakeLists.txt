@@ -31,6 +31,7 @@ add_compile_options(-Wall -Wextra)
 # HW非依存ロジック層をライブラリ化（Arduino 非依存のもののみ）
 add_library(core
   src/lib/core/geo.cpp
+  src/lib/core/cli.cpp
 )
 target_include_directories(core PUBLIC src/lib/core)
 

@@ -89,3 +89,4 @@ jobs:
         run: |
           tools/build.sh src/blink_led
           tools/build.sh src/flight
+          tools/build.sh src/shell
