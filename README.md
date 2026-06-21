@@ -16,6 +16,8 @@ push(main) / Pull Request で以下を自動実行する（[ワークフロー](
 
 ## 開発ドキュメント
 
+- **開発ワークフロー（Issue/ブランチ/PR/PR前レビューゲート）**: [doc/development/development_workflow.md](doc/development/development_workflow.md)
+- **Spresense 実装の落とし穴集（実装前チェックリスト）**: [doc/development/spresense_gotchas.md](doc/development/spresense_gotchas.md)
 - 開発環境（IDE・書き込み・実機確認）: [doc/development/spresense_setup.md](doc/development/spresense_setup.md)
 - CLIビルド・書き込み・モニタ・clangd: [doc/development/build_arduino_cli.md](doc/development/build_arduino_cli.md)
 - オンターゲット試験シェル（NT-Shell）: [doc/development/serial_shell.md](doc/development/serial_shell.md)
@@ -29,4 +31,7 @@ tools/build.sh   src/blink_led   # Spresense向けビルド
 tools/upload.sh  src/blink_led   # ビルド＋書き込み（要ブートローダ導入）
 tools/monitor.sh                 # シリアルモニタ 115200bps
 tools/test.sh                    # ホストユニットテスト
+tools/precheck.sh                # PR前チェック一括（test+静的解析+整形をローカル先取り）
 ```
+
+> PR を出す前に `tools/precheck.sh` を通すこと。詳細は [開発ワークフロー](doc/development/development_workflow.md) を参照。
