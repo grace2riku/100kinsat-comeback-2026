@@ -1,0 +1,5 @@
+# 整形スタイル: Google ベース（2スペース）。列幅のみ 100 に緩和。
+# 対象は src/lib 配下と test 配下の C++（.h/.cpp）。
+# .ino（Arduino スケッチ）と test/vendor（同梱 doctest）は対象外。
+BasedOnStyle: Google
+ColumnLimit: 100
