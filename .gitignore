@@ -44,6 +44,9 @@ build/
 Build/
 build-*/
 
+# arduino-cli build output (compile_commands.json の参照先。clangd用に永続化する)
+.arduino-build/
+
 # CMake generated files
 CMakeFiles/
 CMakeCache.txt
