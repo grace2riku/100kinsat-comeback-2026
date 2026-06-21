@@ -76,10 +76,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Codex の PR 自動レビューで受けた妥当な指摘は、対応のうえ **`spresense_gotchas.md` に1行追加して資産化**する（同じ不具合を二度とPRに出さない）。
 
 ## Claude Code 運用方針（MCP / スキル / サブエージェント）
-- **役割分担**: 実装(TDD)とPR前セルフレビューは Claude、PR前の差分レビューはローカル `codex`（事前批評役）、PR自動レビューは Codex(GitHub)。詳細は `development_workflow.md` §7。
-- **サブエージェント**: 広いコード探索・調査は `Explore`/`general-purpose` に委譲し、結論だけ受け取る（コンテキスト節約）。実装方針の検討は `Plan`。
+- **役割分担**: 実装(TDD)とPR前セルフレビューは Claude（メイン会話）、**PR前の独立レビューは `code-reviewer` サブエージェント**（外部依存ゼロの事前批評役）、汎用バグ観点は `/code-review`、PR自動レビューは Codex(GitHub)。詳細は `development_workflow.md` §5-3 / §7。
+- **実装力強化の中核**: 「実装 → 独立レビュー(`code-reviewer`) → 修正 → 指摘を `spresense_gotchas.md` に資産化」の閉ループを毎回回す。これが考慮漏れを構造的に減らす。
+- **サブエージェント**: 独立レビューは `.claude/agents/code-reviewer.md`（Spresense gotchas を焼き込んだ敵対的レビュー担当）。広いコード探索・調査は `Explore`/`general-purpose` に委譲し結論だけ受け取る。実装方針の検討は `Plan`。
 - **スキル**: 差分レビューは `/code-review`（`ultra` で多エージェントのクラウドレビュー）、品質整理は `/simplify`、ライブラリ調査は context7（MCP）を優先。
-- **MCP**: ライブラリ/SDK/CLI の仕様確認は context7 を使う（記憶に頼らず最新ドキュメントを引く）。
+- **MCP**: ライブラリ/SDK/CLI の仕様確認は context7 を使う（記憶に頼らず最新ドキュメントを引く）。別ベンダーのモデルをレビューに使う場合も MCP/HTTP 経由（Gatekeeper非依存）。
 - **権限**: よく使うプロジェクトコマンドは `.claude/settings.json`（チーム共有・チェックイン）の許可リストに登録済み。個人固有の許可は `.claude/settings.local.json`（gitignore対象）。
 
 

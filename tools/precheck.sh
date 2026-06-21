@@ -10,7 +10,7 @@
 #   2. 静的解析 cppcheck     (src/lib/core)
 #   3. 整形チェック clang-format --dry-run --Werror
 #   4. Arduino ビルド        (arduino-cli があれば任意スケッチを compile)
-#   5. Codex ローカルレビュー (PRECHECK_CODEX=1 のときのみ・任意)
+#   5. クロスベンダー別モデルレビュー (PRECHECK_CODEX=1 のときのみ・任意・人間が手元で実行)
 #
 # 使い方:
 #   tools/precheck.sh                       # 1〜3 を実行（基本）
@@ -85,12 +85,16 @@ if [ "$#" -gt 0 ]; then
   fi
 fi
 
-# 5. Codex ローカルレビュー（任意・PRECHECK_CODEX=1 のときのみ）---------------
-# push 前に差分を Codex に見せて、PR で受けるレビューを先取りする。
-# codex のバージョンによりサブコマンド/フラグが異なるため、失敗しても致命にしない。
+# 5. クロスベンダー別モデルレビュー（任意・PRECHECK_CODEX=1 のときのみ）---------
+# push 前に差分を別ベンダーのモデル(codex 等)に見せ、PR で受けるレビューを先取りする。
+# 注意: これは「人間が手元で回す」任意ステップ。CI には無い。
+#   - PR前の独立レビューの主役は code-reviewer サブエージェント / /code-review（外部依存ゼロ）。
+#     本ステップはクロスベンダーの多様性を足したいときの補助。
+#   - Claude Code 自身からの codex 起動は macOS Gatekeeper 等で失敗し得る（人間が手元で実行する前提）。
+#   - codex のバージョンでサブコマンド/フラグが異なるため、失敗しても致命にしない。
 if [ "${PRECHECK_CODEX:-0}" = "1" ]; then
   echo ""
-  echo "==================== 5. codex local review ===================="
+  echo "==================== 5. cross-vendor model review (任意/手動) ===================="
   if ! command -v codex >/dev/null 2>&1; then
     echo "skip: codex CLI が見つからない"
   else
