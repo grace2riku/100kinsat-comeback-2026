@@ -73,6 +73,24 @@ clang_format_step() {
 }
 run_step "3. clang-format" clang_format_step
 
+# 3b. 生成由来マーカー混入チェック（ドキュメント衛生）------------------------
+# Write/生成ツール由来のテンプレート閉じタグ等がコミット対象に紛れ込むのを検出する
+# （gotchas D 系。過去に doc へ混入し Codex 指摘を受けた）。
+# 本スクリプト自身は検査用にマーカー文字列を含むため、対象から除外する。
+leaked_marker_step() {
+  local hits
+  # ツール固有で通常コンテンツに出ない文字列のみ対象（autolink `<...>` 等を誤検出しない）。
+  hits=$(git grep -n -E '</content>|antml:' \
+    -- 'doc/' '*.md' 'src/' 'tools/' '.claude/' ':!tools/precheck.sh' 2>/dev/null || true)
+  if [ -n "${hits}" ]; then
+    echo "生成由来マーカーの混入を検出:" >&2
+    echo "${hits}" >&2
+    return 1
+  fi
+  echo "生成由来マーカーなし"
+}
+run_step "3b. leaked-marker check" leaked_marker_step
+
 # 4. Arduino ビルド（任意・引数でスケッチ指定があれば）-----------------------
 if [ "$#" -gt 0 ]; then
   if command -v arduino-cli >/dev/null 2>&1; then
