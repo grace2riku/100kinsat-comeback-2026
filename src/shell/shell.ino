@@ -136,11 +136,27 @@ static int execute_line(const char* text) {
 }
 
 // ---- NT-Shell コールバック ----
+//
+// 改行の正規化: NT-Shell は CR(0x0d) のみを「行確定(enter)」として扱う。
+// シリアルモニタの改行設定（CR / LF / CRLF）に依らず確定できるよう、
+// LF 単独は CR に変換し、CRLF の LF は読み飛ばして二重確定を防ぐ。
 static int func_read(char* buf, int cnt, void* /*extobj*/) {
-  if (Serial.available()) {
-    return Serial.readBytes(buf, cnt);
+  static char prev = 0;
+  int n = 0;
+  while (n < cnt && Serial.available()) {
+    char raw = (char)Serial.read();
+    char c = raw;
+    if (raw == '\n') {
+      if (prev == '\r') {  // CRLF の LF は読み飛ばす（CR で確定済み）
+        prev = raw;
+        continue;
+      }
+      c = '\r';  // LF 単独は CR に変換して確定させる
+    }
+    prev = raw;
+    buf[n++] = c;
   }
-  return 0;
+  return n;
 }
 
 static int func_write(const char* buf, int cnt, void* /*extobj*/) {

@@ -49,5 +49,10 @@ if [ -z "${PORT}" ]; then
 fi
 
 echo "==> compile + upload: ${SKETCH}  (FQBN=${FQBN}, port=${PORT})"
-arduino-cli compile --fqbn "${FQBN}" --warnings all -u -p "${PORT}" "${REPO_ROOT}/${SKETCH}"
+# --libraries: build.sh と同様、同梱ライブラリ(libraries/ntshell)と自前モジュール
+#              (src/lib/core 等)の探索パスを追加する（src/shell 等のビルドに必要）。
+arduino-cli compile --fqbn "${FQBN}" --warnings all -u -p "${PORT}" \
+  --libraries "${REPO_ROOT}/libraries" \
+  --libraries "${REPO_ROOT}/src/lib" \
+  "${REPO_ROOT}/${SKETCH}"
 echo "==> OK（書き込み後にシリアルを見るには: tools/monitor.sh ${PORT}）"
