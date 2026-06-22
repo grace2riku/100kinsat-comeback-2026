@@ -65,11 +65,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: Setup arduino-cli
         uses: arduino/setup-arduino-cli@v2
-      - name: Cache Spresense core
+      - name: Cache Spresense core and libraries
         uses: actions/cache@v4
         with:
+          # ~/.arduino15 に Spresense コア＋ Adafruit BNO055(と依存) を含める。
+          # ライブラリ依存を増やしたらキー世代(-vN)を上げる（同一キーは上書きされず旧内容に固定されるため）。
           path: ~/.arduino15
-          key: arduino-spresense-${{ runner.os }}-v1
+          key: arduino-spresense-${{ runner.os }}-v2
       - name: Install Spresense core
         run: |
           arduino-cli config init --overwrite
@@ -85,6 +87,22 @@ jobs:
           # リトライしても入らなければ明示的に失敗させる
           arduino-cli core list | grep -q "SPRESENSE:spresense" \
             || { echo "::error::Spresense コア導入に失敗しました"; exit 1; }
+      - name: Install Arduino libraries (Adafruit BNO055)
+        run: |
+          # src/shell が 9軸センサ(BNO055)を結線するため、Adafruit BNO055 と依存
+          # (Adafruit Unified Sensor / Adafruit BusIO)をグローバルに導入する。
+          # 配布サーバの過渡的エラーに備えてリトライする（コア導入と同方針）。
+          for i in 1 2 3 4 5; do
+            arduino-cli lib update-index && arduino-cli lib install "Adafruit BNO055" && break
+            echo "::warning::Adafruit BNO055 導入に失敗 (試行 $i)。リトライします..."
+            sleep 20
+          done
+          arduino-cli lib list
+          # 本体と主要依存(Unified Sensor)の両方を確認し、ビルド段階まで失敗を遅延させない。
+          arduino-cli lib list | grep -qi "Adafruit BNO055" \
+            || { echo "::error::Adafruit BNO055 導入に失敗しました"; exit 1; }
+          arduino-cli lib list | grep -qi "Adafruit Unified Sensor" \
+            || { echo "::error::依存 Adafruit Unified Sensor の導入に失敗しました"; exit 1; }
       - name: Build sketches
         run: |
           tools/build.sh src/blink_led
