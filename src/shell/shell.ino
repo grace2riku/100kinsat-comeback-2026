@@ -11,8 +11,8 @@
  *   - 各コマンドの実体（HW依存）: 本スケッチ内のハンドラ
  *
  * コマンド:
- *   - help / led / cds / beep は実動作
- *   - motor / imu / gnss / log は Phase2 で hal モジュールを結線して実装するスタブ
+ *   - help / led / cds / beep / motor は実動作
+ *   - imu / gnss / log は Phase2 で hal モジュールを結線して実装するスタブ
  *
  * シリアル: 115200 bps
  */
