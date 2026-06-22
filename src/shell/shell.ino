@@ -127,9 +127,16 @@ static int cmd_motor(int argc, char** argv) {
   const char* dir = argv[1];
 
   if (strcmp(dir, "stop") == 0) {
-    g_motor.stop();
+    g_motor.stop();  // 停止は安全側なので余剰引数があっても受理する
     Serial.println("motor stop");
     return 0;
+  }
+
+  // 駆動コマンドは余剰引数を弾く（誤入力で HW を駆動しないため。gotchas B6）。
+  // 受理する形: motor <dir> [duty] [ms]（最大4トークン）。
+  if (argc > 4) {
+    Serial.println("引数が多すぎます: motor <forward|back|left|right|stop> [duty 0-255] [ms]");
+    return -1;
   }
 
   uint8_t duty = 150;  // 既定デューティ
