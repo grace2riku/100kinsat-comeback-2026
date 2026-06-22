@@ -50,9 +50,12 @@ class MockGpio : public hal::Gpio {
   std::map<uint8_t, int> pwm_;
 };
 
-// テスト用のピン割当（実機定数を流用）。
-constexpr motor::Pins kL = hal::kMotorLeft;   // {8,4,5}
-constexpr motor::Pins kR = hal::kMotorRight;  // {7,2,3}
+// テスト用のピン割当（実機定数を流用）。値は spresense_pins.h が単一情報源
+// （実機検証で左右を入替済み: 左=モータB{7,2,3} / 右=モータA{8,4,5}）。
+// 本テストは「割当てられたピンに真理値表どおり出力する」ことの検証なので、
+// 左右の値に依らず成立する。
+constexpr motor::Pins kL = hal::kMotorLeft;
+constexpr motor::Pins kR = hal::kMotorRight;
 
 // 1モータが「前進(High/Low + duty)」になっているか。
 void expectForward(const MockGpio& g, const motor::Pins& m, int duty) {
