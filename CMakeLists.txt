@@ -33,6 +33,7 @@ add_library(core
   src/lib/core/geo.cpp
   src/lib/core/cli.cpp
   src/lib/core/motor.cpp
+  src/lib/core/compass.cpp
 )
 target_include_directories(core PUBLIC src/lib/core)
 
