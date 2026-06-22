@@ -71,6 +71,9 @@ vcpkg_installed/
 Testing/
 .cache/
 
+# Claude Code: 個人固有の権限・設定はローカルのみ（チーム共有は .claude/settings.json を追跡）
+.claude/settings.local.json
+
 # macOS
 .DS_Store
 

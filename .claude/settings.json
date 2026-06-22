@@ -1,0 +1,36 @@
+{
+  "$comment": "チーム共有のClaude Code設定（チェックイン）。個人固有の許可は .claude/settings.local.json（gitignore対象）に書く。よく使うプロジェクトコマンドを許可リスト化し、不要な権限プロンプトを減らす。",
+  "permissions": {
+    "allow": [
+      "Bash(tools/build.sh:*)",
+      "Bash(tools/test.sh:*)",
+      "Bash(tools/upload.sh:*)",
+      "Bash(tools/monitor.sh:*)",
+      "Bash(tools/gen_compile_commands.sh:*)",
+      "Bash(tools/precheck.sh:*)",
+      "Bash(arduino-cli version:*)",
+      "Bash(arduino-cli core:*)",
+      "Bash(arduino-cli compile:*)",
+      "Bash(arduino-cli board:*)",
+      "Bash(arduino-cli config:*)",
+      "Bash(cmake:*)",
+      "Bash(ctest:*)",
+      "Bash(clang-format:*)",
+      "Bash(cppcheck:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git checkout:*)",
+      "Bash(git branch:*)",
+      "Bash(git fetch:*)",
+      "Bash(git pull:*)",
+      "Bash(gh pr:*)",
+      "Bash(gh issue:*)",
+      "Bash(gh run:*)",
+      "Bash(gh api:*)",
+      "Bash(gh label:*)"
+    ]
+  }
+}
