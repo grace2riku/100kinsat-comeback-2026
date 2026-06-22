@@ -9,13 +9,13 @@
 #   1. ホストユニットテスト  (tools/test.sh)
 #   2. 静的解析 cppcheck     (src/lib/core)
 #   3. 整形チェック clang-format --dry-run --Werror
-#   4. Arduino ビルド        (arduino-cli があれば任意スケッチを compile)
+#   4. Arduino ビルド        (arduino-cli があれば CI と同じスケッチ群を compile)
 #   5. クロスベンダー別モデルレビュー (PRECHECK_CODEX=1 のときのみ・任意・人間が手元で実行)
 #
 # 使い方:
-#   tools/precheck.sh                       # 1〜3 を実行（基本）
-#   tools/precheck.sh src/shell src/flight  # 末尾4で指定スケッチもビルド
-#   PRECHECK_CODEX=1 tools/precheck.sh       # 末尾5で差分を Codex レビュー
+#   tools/precheck.sh                       # 1〜4 を実行（4はCIと同じ blink_led/flight/shell）
+#   tools/precheck.sh src/shell             # 4のビルド対象を指定スケッチで上書き
+#   PRECHECK_CODEX=1 tools/precheck.sh       # 末尾5で差分を別モデルにレビューさせる
 #
 # 終了コード: いずれかのチェックが失敗したら非0。全部通れば0。
 #
@@ -91,16 +91,22 @@ leaked_marker_step() {
 }
 run_step "3b. leaked-marker check" leaked_marker_step
 
-# 4. Arduino ビルド（任意・引数でスケッチ指定があれば）-----------------------
+# 4. Arduino ビルド（既定で CI と同じスケッチ群を compile）---------------------
+# CI(.github/workflows/ci.yml)が compile する全スケッチを既定対象にし、ローカルゲートを
+# CI と一致させる（一部を省くとローカル緑でも PR で落ちるため。gotchas C4）。
+# 引数を渡した場合はそのスケッチ群で上書きする。
 if [ "$#" -gt 0 ]; then
-  if command -v arduino-cli >/dev/null 2>&1; then
-    for sketch in "$@"; do
-      run_step "4. arduino build: ${sketch}" tools/build.sh "${sketch}"
-    done
-  else
-    echo ""
-    echo "skip: arduino-cli 未導入のためスケッチビルドを省略（指定: $*）"
-  fi
+  SKETCHES=("$@")
+else
+  SKETCHES=(src/blink_led src/flight src/shell)
+fi
+if command -v arduino-cli >/dev/null 2>&1; then
+  for sketch in "${SKETCHES[@]}"; do
+    run_step "4. arduino build: ${sketch}" tools/build.sh "${sketch}"
+  done
+else
+  echo ""
+  echo "skip: arduino-cli 未導入のためスケッチビルドを省略（CIで実行・対象: ${SKETCHES[*]}）"
 fi
 
 # 5. クロスベンダー別モデルレビュー（任意・PRECHECK_CODEX=1 のときのみ）---------

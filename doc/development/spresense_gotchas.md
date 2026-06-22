@@ -42,6 +42,7 @@
 | C1 | `tools/upload.sh` で書き込み時にライブラリ未解決でビルド失敗 | `tools/build.sh` に `--libraries` を足したが `upload.sh` に反映漏れ | `build.sh` と `upload.sh` は同じ `arduino-cli compile` オプション（`--libraries` 等）を**ミラーする**。片方を変えたら必ずもう片方も |
 | C2 | （一般則）ヘッダ宣言と実装、ドキュメントとコードの不一致 | 対の更新漏れ | シグネチャ・定数・手順を変えたら、宣言／実装／ドキュメント／テストの**4点セット**を同時に更新 |
 | C3 | スクリプト(precheck/CI)と運用ドキュメントで、同一ツール（codex 等）の起動主体・自動/手動・前提が食い違う | 仕組みを再設計したのにドキュメント側の役割表・手順名を更新し忘れる | スクリプトの**ステップ名・前提（誰が・自動か手動か）**と `development_workflow.md` の §5/§7 役割表は**対で更新**する。`code-reviewer` サブエージェント自身のレビューで検出（自己ドッグフーディング） |
+| C4 | ローカルゲート(`precheck.sh`)が CI の一部ジョブを既定で省き、ローカル緑でも PR で落ちる（例: 引数なしだと Arduino ビルドをスキップ） | 「CI先取り」と謳いつつ CI の全ジョブをミラーしていなかった | `precheck.sh` は **CI(.github/workflows/ci.yml) の全ジョブ**（host-test/lint/arduino-build）を既定で先取りする。CI 側のビルド対象（`blink_led`/`flight`/`shell`）を変えたら precheck の既定リストも対で更新する |
 
 ---
 

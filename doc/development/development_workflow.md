@@ -48,7 +48,7 @@ tools/precheck.sh
 1. **ホストユニットテスト** — `tools/test.sh`（cmake + ctest + doctest）
 2. **静的解析** — cppcheck（`src/lib/core`）
 3. **整形チェック** — clang-format `--dry-run --Werror`
-4. **Arduino ビルド** — `arduino-cli` が在れば対象スケッチを compile（任意）
+4. **Arduino ビルド** — `arduino-cli` が在れば CI と同じスケッチ群（`blink_led`/`flight`/`shell`）を compile（CIの arduino-build ジョブを先取り。引数で対象上書き可）
 5. **クロスベンダー別モデルレビュー** — `PRECHECK_CODEX=1` 指定時のみ・任意・人間が手元で実行（§5-3(c)）
 
 全部緑になるまで push しない。これは CI の失敗を**ローカルで先に**観測するための門番。
