@@ -32,7 +32,6 @@ add_compile_options(-Wall -Wextra)
 add_library(core
   src/lib/core/geo.cpp
   src/lib/core/cli.cpp
-  src/lib/core/motor.cpp
 )
 target_include_directories(core PUBLIC src/lib/core)
 
