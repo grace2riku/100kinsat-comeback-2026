@@ -30,8 +30,12 @@ class Bno055Compass {
 
   // 検出・初期化し外部クロックを有効化する。false=未検出（I2C 配線/アドレス/電源を疑う）。
   // 既定動作モードは NDOF（加速+地磁気+ジャイロ融合、地磁気校正あり）。
-  // Adafruit の begin() は検出を最大 850ms のタイムアウトループで試すため、未検出でも
-  // 無限ハングはせず false を返す（imu_bringup 手順Aで実測確認）。
+  // 注意（ハングしうる）: Adafruit の begin() は「最初から不在」なら ~850ms のタイムアウトで false
+  // を
+  //   返すが、一度 ACK した後のソフトリセット→CHIP_ID 待ち（内部 while ループ）で応答が戻らないと
+  //   無限ブロックし得る（ブラウンアウト/活線抜け）。このため呼び出し側は **setup() では呼ばず**、
+  //   'imu init' のオンデマンド実行にしてシェル起動を止めないこと（gotchas
+  //   B9）。復帰はボードリセット。
   bool begin() {
     if (!bno_.begin()) {  // 既定 OPERATION_MODE_NDOF
       begun_ = false;

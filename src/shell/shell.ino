@@ -399,12 +399,11 @@ void setup() {
 
   g_motor.begin();  // モータ6ピンを出力設定（起動直後は停止のまま）
 
-  // 9軸センサを初期化（未検出でもシェルは起動する。後から 'imu init' で再試行可）。
-  if (g_imu.begin()) {
-    Serial.println("imu: BNO055 検出・初期化 OK");
-  } else {
-    Serial.println("imu: BNO055 未検出（I2C 0x28 の配線・電源を確認。'imu init' で再試行可）");
-  }
+  // 9軸センサは setup() で初期化しない。Adafruit begin() はソフトリセット後の CHIP_ID 待ちが
+  // 無限ループになり得る（一度 ACK 後にブラウンアウト/活線抜けで応答が戻らない場合）。ここで呼ぶと
+  // シェル全体が起動前にハングし、無関係なコマンドも使えなくなる。初期化は 'imu init' のオンデマンドに
+  // して、起動（プロンプト表示）を絶対に止めないようにする（gotchas B9）。
+  Serial.println("imu: 9軸センサ(BNO055)は 'imu init' で初期化してください");
 
   ntshell_init(&ntshell, func_read, func_write, func_callback, (void*)(&ntshell));
   ntshell_set_prompt(&ntshell, PROMPT_STR);
