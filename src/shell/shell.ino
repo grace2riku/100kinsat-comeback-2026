@@ -234,7 +234,8 @@ static int imu_read_once() {
 //   imu cal      : キャリブレーション状態だけ表示する
 //   imu mon [n]  : n回（既定20・上限120）方位/校正を約0.5秒間隔で表示する（校正収束の観察用）
 // 注: mon は読み取り専用で HW を駆動しないため安全（gotchas B5）。長時間ブロックを避けるため
-//     インターバル中にシリアル入力があれば即中断する（millis ベースのポーリング待ち）。
+//     インターバル中に Enter 以外のキー入力があれば即中断する（millis ベースのポーリング待ち）。
+//     CRLF の残留 LF を中断と誤認しないよう CR/LF は読み飛ばす（gotchas B10）。
 static int cmd_imu(int argc, char** argv) {
   if (argc > 3) {
     Serial.println("usage: imu [init|stat|cal|mon [n]]");
@@ -308,17 +309,24 @@ static int cmd_imu(int argc, char** argv) {
       Serial.print(count);
       Serial.print("] ");
       imu_read_once();
-      // インターバル待ち。キー入力があれば残りを打ち切る（長時間ブロックの回避）。
+      // インターバル待ち。Enter 以外のキー入力があれば残りを打ち切る（長時間ブロックの回避）。
+      // 注（gotchas B10）: 本コマンドを確定した Enter は、CRLF モニタだと CR で確定された後に LF が
+      //   遅れて届く。この残留 LF を中断キーと誤認すると mon が1サンプルで止まる。よって CR/LF は
+      //   読み飛ばし、非改行バイトのみを中断トリガーにする。
       if (i + 1 < count) {
         unsigned long start = millis();
         bool aborted = false;
         while (millis() - start < 500) {
           if (Serial.available()) {
-            while (Serial.available()) {
-              Serial.read();  // 入力を読み捨てて中断
+            int c = Serial.read();
+            if (c >= 0 && c != '\r' && c != '\n') {
+              while (Serial.available()) {
+                Serial.read();  // 残りの入力も読み捨てて中断
+              }
+              aborted = true;
+              break;
             }
-            aborted = true;
-            break;
+            // CR/LF（コマンド確定の残留改行）は読み飛ばして待機を継続する
           }
         }
         if (aborted) {
