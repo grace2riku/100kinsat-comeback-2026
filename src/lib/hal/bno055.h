@@ -57,6 +57,14 @@ class Bno055Compass {
       return compass::kInvalidHeading;
     }
     imu::Vector<3> euler = bno_.getVector(Adafruit_BNO055::VECTOR_EULER);
+    // Adafruit の getVector は I2C 読み取り失敗（ブラウンアウト/活線抜け/一過性エラー）でも
+    // readLen の戻り値を無視し、ゼロ初期化バッファ（=全軸 0.0）をそのまま返す。これを「有効な
+    // 北(0°)」と誤認すると下流（imu 表示・#18 ナビ）が偽の方位で動くため、Euler 3軸が厳密に
+    // 全て 0.0 のときは読み取り失敗とみなし kInvalidHeading を返す（gotchas B8）。実機の姿勢が
+    // 3軸とも厳密に 0.0 になることは事実上なく、正常値の取りこぼしは無視できる。
+    if (euler.x() == 0.0 && euler.y() == 0.0 && euler.z() == 0.0) {
+      return compass::kInvalidHeading;
+    }
     return compass::normalizeHeading(euler.x());
   }
 
