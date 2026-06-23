@@ -50,28 +50,25 @@ class Bno055Compass {
 
   // 方位角 [0,360)[deg]。未初期化なら kInvalidHeading（NaN）を返す。
   // Euler ベクトルの x() を heading として扱い、compass で [0,360) の不変条件を担保する。
-  // 注意: 基準(北=0)・回転の向き(時計回りで増加か)は BNO055 の軸定義と基板取付向きに依存し、
-  //       未検証。実機で確認し（imu_bringup 手順C）、オフセット/符号の吸収は #18 で行う。
+  // 注意1: 基準(北=0)・回転の向き(時計回りで増加か)は BNO055 の軸定義と基板取付向きに依存し、
+  //        未検証。実機で確認し（imu_bringup 手順C）、オフセット/符号の吸収は #18 で行う。
+  // 注意2: getVector は I2C 読み取り失敗時もゼロ初期化値(全軸0)を返すが、**水平で真北なら正常時も
+  //        0.0 になり得る**（Euler は 1°=16LSB 量子化）。よって heading()
+  //        単体では「読み取り失敗」と
+  //        「真北」を値で区別できない。ハード故障(活線抜け/ブラウンアウト)の検知はデータ値ではなく
+  //        別経路の healthy()/systemStatus() で行うこと（gotchas B8）。
   double heading() {
     if (!begun_) {
       return compass::kInvalidHeading;
     }
     imu::Vector<3> euler = bno_.getVector(Adafruit_BNO055::VECTOR_EULER);
-    // Adafruit の getVector は I2C 読み取り失敗（ブラウンアウト/活線抜け/一過性エラー）でも
-    // readLen の戻り値を無視し、ゼロ初期化バッファ（=全軸 0.0）をそのまま返す。これを「有効な
-    // 北(0°)」と誤認すると下流（imu 表示・#18 ナビ）が偽の方位で動くため、Euler 3軸が厳密に
-    // 全て 0.0 のときは読み取り失敗とみなし kInvalidHeading を返す（gotchas B8）。実機の姿勢が
-    // 3軸とも厳密に 0.0 になることは事実上なく、正常値の取りこぼしは無視できる。
-    if (euler.x() == 0.0 && euler.y() == 0.0 && euler.z() == 0.0) {
-      return compass::kInvalidHeading;
-    }
     return compass::normalizeHeading(euler.x());
   }
 
   // キャリブレーション状態（各0-3）。未初期化なら全0を返す。
   // 注意: Adafruit の getCalibration は void で I2C 読み取り失敗を通知しない。読めなかった場合は
   //       前回値/0 が残るため、「全0(未校正)」と「読み取り失敗」を本APIでは区別できない。
-  //       校正の信頼性は heading() の有効性（isValidHeading）と併せて判断すること。
+  //       読み取り健全性は healthy()/systemStatus() で別途確認すること（gotchas B8）。
   compass::CalibrationStatus calibration() {
     // gotchas B7: 複数変数はゼロ初期化を1つずつ明示（`uint8_t a,b,c,d=0;`
     // の部分初期化罠を避ける）。
@@ -84,6 +81,35 @@ class Bno055Compass {
     }
     return compass::CalibrationStatus{system, gyro, accel, mag};
   }
+
+  // BNO055 のシステム状態（データシート §4.3.58/59）。読み取り健全性の判定に使う。
+  //   status:   0=Idle/1=SystemError/2=InitPeripherals/3=SystemInit/4=SelfTest/
+  //             5=Fusion稼働中/6=Fusion無しで稼働
+  //   selfTest: 各ビット 1=合格（0x0F で全合格）
+  //   error:    0=エラー無し（非0はデータシート §4.3.59 のエラーコード）
+  struct SystemStatus {
+    uint8_t status;
+    uint8_t selfTest;
+    uint8_t error;
+  };
+
+  // システム状態を読む。未初期化なら全0（=Idle相当）。
+  // 注意: Adafruit の getSystemStatus は内部に delay(200) を持つ。方位ホットループには入れず、
+  //       初期化確認や定期ヘルスチェックなど明示的な用途に使う。
+  SystemStatus systemStatus() {
+    uint8_t status = 0;
+    uint8_t selftest = 0;
+    uint8_t error = 0;
+    if (begun_) {
+      bno_.getSystemStatus(&status, &selftest, &error);
+    }
+    return SystemStatus{status, selftest, error};
+  }
+
+  // 融合アルゴリズムが正常稼働中か（system_status==5）。読み取り失敗/未準備/未初期化なら false。
+  // heading() の値からは検知できないハード故障（活線抜け・ブラウンアウト）を別経路で捉えるための
+  // 健全性プローブ（gotchas B8）。delay(200) を伴うため毎フレーム呼ばないこと。
+  bool healthy() { return systemStatus().status == 5; }
 
  private:
   Adafruit_BNO055 bno_;

@@ -68,10 +68,15 @@ jobs:
       - name: Cache Spresense core and libraries
         uses: actions/cache@v4
         with:
-          # ~/.arduino15 に Spresense コア＋ Adafruit BNO055(と依存) を含める。
-          # ライブラリ依存を増やしたらキー世代(-vN)を上げる（同一キーは上書きされず旧内容に固定されるため）。
-          path: ~/.arduino15
-          key: arduino-spresense-${{ runner.os }}-v2
+          # arduino-cli の保存先は2系統に分かれる:
+          #   ~/.arduino15      = directories.data（コア/インデックス）
+          #   ~/Arduino/libraries = directories.user（lib install の導入先＝Adafruit BNO055 等）
+          # ライブラリは後者に入るため両方をキャッシュする（前者だけだと毎ラン再導入になる）。
+          # キャッシュ内容/パスを変えたらキー世代(-vN)を上げる（同一キーは上書きされず旧内容に固定）。
+          path: |
+            ~/.arduino15
+            ~/Arduino
+          key: arduino-spresense-${{ runner.os }}-v3
       - name: Install Spresense core
         run: |
           arduino-cli config init --overwrite

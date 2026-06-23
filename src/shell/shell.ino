@@ -57,7 +57,7 @@ static const cli::Command kCommands[] = {
     {"cds", "cds : 照度センサ(A0)の生値を表示", cmd_cds},
     {"beep", "beep <freq_hz> <ms> : スピーカ(D09)を鳴らす", cmd_beep},
     {"motor", "motor <forward|back|left|right|stop> [duty 0-255] [ms] : モータ駆動", cmd_motor},
-    {"imu", "imu [init|cal|mon [n]] : 9軸センサ(BNO055)の方位/校正を読む", cmd_imu},
+    {"imu", "imu [init|stat|cal|mon [n]] : 9軸センサ(BNO055)の方位/校正/状態を読む", cmd_imu},
     {"gnss", "gnss : GNSS測位（Issue #10 で実装）", cmd_todo},
     {"log", "log : 制御履歴ログ（Issue #14 で実装）", cmd_todo},
 };
@@ -227,16 +227,17 @@ static int imu_read_once() {
   return 0;
 }
 
-// imu [init|cal|mon [n]]
+// imu [init|stat|cal|mon [n]]
 //   imu          : 方位角とキャリブレーション状態を1回読む
 //   imu init     : センサを(再)初期化する（配線・電源を入れた後に試せる）
+//   imu stat     : システム状態（融合稼働/自己診断/エラー）を表示する＝読み取り健全性の確認
 //   imu cal      : キャリブレーション状態だけ表示する
 //   imu mon [n]  : n回（既定20・上限120）方位/校正を約0.5秒間隔で表示する（校正収束の観察用）
 // 注: mon は読み取り専用で HW を駆動しないため安全（gotchas B5）。長時間ブロックを避けるため
 //     インターバル中にシリアル入力があれば即中断する（millis ベースのポーリング待ち）。
 static int cmd_imu(int argc, char** argv) {
   if (argc > 3) {
-    Serial.println("usage: imu [init|cal|mon [n]]");
+    Serial.println("usage: imu [init|stat|cal|mon [n]]");
     return -1;
   }
 
@@ -259,6 +260,25 @@ static int cmd_imu(int argc, char** argv) {
 
   if (argc == 1) {
     return imu_read_once();
+  }
+
+  if (strcmp(argv[1], "stat") == 0) {
+    if (argc != 2) {
+      Serial.println("usage: imu stat");
+      return -1;
+    }
+    hal::Bno055Compass::SystemStatus s = g_imu.systemStatus();
+    Serial.print("sys_status=");
+    Serial.print(s.status);
+    Serial.print(" self_test=0x");
+    Serial.print(s.selfTest, HEX);
+    Serial.print(" sys_error=");
+    Serial.print(s.error);
+    // status==5（融合稼働中）かつ error==0 を健全とみなす。活線抜け/ブラウンアウトはここで露見する
+    // （heading の値では真北0°と区別できないため。gotchas B8）。
+    Serial.println((s.status == 5 && s.error == 0) ? "  -> 健全(融合稼働中)"
+                                                   : "  -> 異常（配線・電源・初期化を確認）");
+    return 0;
   }
 
   if (strcmp(argv[1], "cal") == 0) {
@@ -310,7 +330,7 @@ static int cmd_imu(int argc, char** argv) {
     return 0;
   }
 
-  Serial.println("usage: imu [init|cal|mon [n]]");
+  Serial.println("usage: imu [init|stat|cal|mon [n]]");
   return -1;
 }
 
