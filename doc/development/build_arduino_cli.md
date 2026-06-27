@@ -45,6 +45,20 @@ arduino-cli core list
 
 ---
 
+## 2.5 サードパーティ Arduino ライブラリの導入（初回のみ）
+
+`src/shell` は 9軸センサ BNO055 を結線するため、Adafruit のライブラリが必要。グローバル（`~/.arduino15`）へ一度導入すれば `tools/build.sh` / `tools/upload.sh` / `tools/precheck.sh` が解決できる（CI でも同じものを `arduino-cli lib install` する）。
+
+```bash
+arduino-cli lib update-index
+arduino-cli lib install "Adafruit BNO055"   # 依存(Adafruit Unified Sensor / Adafruit BusIO)も自動導入
+arduino-cli lib list                          # 導入確認
+```
+
+> 同梱ライブラリ（`libraries/ntshell`）は `--libraries` で探索パスに入るため導入不要。グローバル導入が要るのは上記のような Library Manager 由来のものだけ。
+
+---
+
 ## 3. ビルド
 
 リポジトリ同梱のスクリプトを使う:

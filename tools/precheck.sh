@@ -101,6 +101,22 @@ else
   SKETCHES=(src/blink_led src/flight src/shell)
 fi
 if command -v arduino-cli >/dev/null 2>&1; then
+  # src/shell は BNO055 を結線するため Adafruit BNO055 のグローバル導入が必要（CI も lib install する）。
+  # 未導入だと shell ビルドだけ環境依存で落ちるので、原因を明示して先取り検出する（gotchas C4/E3）。
+  shell_lib_check() {
+    case " ${SKETCHES[*]} " in
+      *" src/shell "*) ;;
+      *) return 0 ;;  # shell をビルドしないなら不要
+    esac
+    if arduino-cli lib list 2>/dev/null | grep -qi "Adafruit BNO055"; then
+      return 0
+    fi
+    echo "Adafruit BNO055 ライブラリが未導入です（src/shell のビルドに必要）。" >&2
+    echo "  導入: arduino-cli lib install \"Adafruit BNO055\"" >&2
+    echo "  詳細: doc/development/build_arduino_cli.md §2.5" >&2
+    return 1
+  }
+  run_step "4-pre. Adafruit BNO055 ライブラリ確認" shell_lib_check
   for sketch in "${SKETCHES[@]}"; do
     run_step "4. arduino build: ${sketch}" tools/build.sh "${sketch}"
   done

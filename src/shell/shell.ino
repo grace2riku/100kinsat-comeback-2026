@@ -11,8 +11,8 @@
  *   - 各コマンドの実体（HW依存）: 本スケッチ内のハンドラ
  *
  * コマンド:
- *   - help / led / cds / beep / motor は実動作
- *   - imu / gnss / log は Phase2 で hal モジュールを結線して実装するスタブ
+ *   - help / led / cds / beep / motor / imu は実動作
+ *   - gnss / log は Phase2 で hal モジュールを結線して実装するスタブ
  *
  * シリアル: 115200 bps
  */
@@ -20,7 +20,9 @@
 #include <Arduino.h>
 
 #include "arduino_gpio.h"
+#include "bno055.h"
 #include "cli.h"
+#include "compass.h"
 #include "motor.h"
 #include "ntshell.h"
 #include "spresense_pins.h"
@@ -37,12 +39,16 @@ static const int LED_PINS[] = {LED0, LED1, LED2, LED3};
 static hal::ArduinoGpio g_gpio;
 static motor::MotorDriver g_motor(g_gpio, hal::kMotorLeft, hal::kMotorRight);
 
+// 9軸センサ（BNO055, I2C 0x28）。begin() の成否を g_imu_ok に保持する。
+static hal::Bno055Compass g_imu;
+
 // ---- コマンドハンドラ（HW依存。0=成功）----
 static int cmd_help(int argc, char** argv);
 static int cmd_led(int argc, char** argv);
 static int cmd_cds(int argc, char** argv);
 static int cmd_beep(int argc, char** argv);
 static int cmd_motor(int argc, char** argv);
+static int cmd_imu(int argc, char** argv);
 static int cmd_todo(int argc, char** argv);  // Phase2 で実装予定のスタブ
 
 static const cli::Command kCommands[] = {
@@ -51,7 +57,7 @@ static const cli::Command kCommands[] = {
     {"cds", "cds : 照度センサ(A0)の生値を表示", cmd_cds},
     {"beep", "beep <freq_hz> <ms> : スピーカ(D09)を鳴らす", cmd_beep},
     {"motor", "motor <forward|back|left|right|stop> [duty 0-255] [ms] : モータ駆動", cmd_motor},
-    {"imu", "imu : 9軸センサ読み取り（Issue #9 で実装）", cmd_todo},
+    {"imu", "imu [init|stat|cal|mon [n]] : 9軸センサ(BNO055)の方位/校正/状態を読む", cmd_imu},
     {"gnss", "gnss : GNSS測位（Issue #10 で実装）", cmd_todo},
     {"log", "log : 制御履歴ログ（Issue #14 で実装）", cmd_todo},
 };
@@ -188,6 +194,157 @@ static int cmd_motor(int argc, char** argv) {
   return 0;
 }
 
+// キャリブレーション状態（各0-3）と完了判定の見立てを1行で表示する。
+static void print_calibration(const compass::CalibrationStatus& c) {
+  Serial.print("  cal sys/gyro/accel/mag = ");
+  Serial.print(c.system);
+  Serial.print("/");
+  Serial.print(c.gyro);
+  Serial.print("/");
+  Serial.print(c.accel);
+  Serial.print("/");
+  Serial.print(c.mag);
+  if (compass::isFullyCalibrated(c)) {
+    Serial.println("  -> 完全校正(全要素3)");
+  } else if (compass::isHeadingReady(c)) {
+    Serial.println("  -> 方位は使用可(暫定: sys+mag=3)");
+  } else {
+    Serial.println("  -> 校正未完了（平面に置き、8の字に回す）");
+  }
+}
+
+// 方位角とキャリブレーションを1回読んで表示する（共通処理）。
+static int imu_read_once() {
+  double h = g_imu.heading();
+  bool valid = compass::isValidHeading(h);
+  Serial.print("heading = ");
+  if (valid) {
+    Serial.print(h, 1);
+    Serial.println(" deg");
+  } else {
+    // 読み取り失敗は 0.0(=真北) ではなく無効として明示する（gotchas B8/B11）。校正行は別 I2C
+    // 読みなので、失敗時も続けて表示し mon での校正収束観察を妨げない。
+    Serial.println("(invalid: I2C読み取り失敗)");
+  }
+  print_calibration(g_imu.calibration());
+  return valid ? 0 : -1;
+}
+
+// imu [init|stat|cal|mon [n]]
+//   imu          : 方位角とキャリブレーション状態を1回読む
+//   imu init     : センサを(再)初期化する（配線・電源を入れた後に試せる）
+//   imu stat     : システム状態（融合稼働/自己診断/エラー）を表示する＝読み取り健全性の確認
+//   imu cal      : キャリブレーション状態だけ表示する
+//   imu mon [n]  : n回（既定20・上限120）方位/校正を約0.5秒間隔で表示する（校正収束の観察用）
+// 注: mon は読み取り専用で HW を駆動しないため安全（gotchas B5）。長時間ブロックを避けるため
+//     インターバル中に Enter 以外のキー入力があれば即中断する（millis ベースのポーリング待ち）。
+//     CRLF の残留 LF を中断と誤認しないよう CR/LF は読み飛ばす（gotchas B10）。
+static int cmd_imu(int argc, char** argv) {
+  if (argc > 3) {
+    Serial.println("usage: imu [init|stat|cal|mon [n]]");
+    return -1;
+  }
+
+  // init は未検出でも試せるよう、ready 判定より前に処理する。
+  if (argc >= 2 && strcmp(argv[1], "init") == 0) {
+    if (argc != 2) {
+      Serial.println("usage: imu init");
+      return -1;
+    }
+    bool ok = g_imu.begin();
+    Serial.println(ok ? "imu: BNO055 検出・初期化 OK"
+                      : "imu: BNO055 未検出（I2C 0x28 の配線・電源を確認）");
+    return ok ? 0 : -1;
+  }
+
+  if (!g_imu.ready()) {
+    Serial.println("imu: 未初期化。'imu init' で初期化してください（未検出なら配線を確認）");
+    return -1;
+  }
+
+  if (argc == 1) {
+    return imu_read_once();
+  }
+
+  if (strcmp(argv[1], "stat") == 0) {
+    if (argc != 2) {
+      Serial.println("usage: imu stat");
+      return -1;
+    }
+    hal::Bno055Compass::SystemStatus s = g_imu.systemStatus();
+    Serial.print("sys_status=");
+    Serial.print(s.status);
+    Serial.print(" self_test=0x");
+    Serial.print(s.selfTest, HEX);
+    Serial.print(" sys_error=");
+    Serial.print(s.error);
+    // status==5（融合稼働中）かつ error==0 を健全とみなす。活線抜け/ブラウンアウトはここで露見する
+    // （heading の値では真北0°と区別できないため。gotchas B8）。
+    Serial.println((s.status == 5 && s.error == 0) ? "  -> 健全(融合稼働中)"
+                                                   : "  -> 異常（配線・電源・初期化を確認）");
+    return 0;
+  }
+
+  if (strcmp(argv[1], "cal") == 0) {
+    if (argc != 2) {
+      Serial.println("usage: imu cal");
+      return -1;
+    }
+    print_calibration(g_imu.calibration());
+    return 0;
+  }
+
+  if (strcmp(argv[1], "mon") == 0) {
+    const int kMaxCount = 120;
+    int count = 20;  // 既定回数
+    if (argc == 3) {
+      if (!cli::parseInt(argv[2], count) || count < 1 || count > kMaxCount) {
+        Serial.print("回数は 1-");
+        Serial.print(kMaxCount);
+        Serial.println(" の整数");
+        return -1;
+      }
+    }
+    for (int i = 0; i < count; i++) {
+      Serial.print("[");
+      Serial.print(i + 1);
+      Serial.print("/");
+      Serial.print(count);
+      Serial.print("] ");
+      imu_read_once();
+      // インターバル待ち。Enter 以外のキー入力があれば残りを打ち切る（長時間ブロックの回避）。
+      // 注（gotchas B10）: 本コマンドを確定した Enter は、CRLF モニタだと CR で確定された後に LF が
+      //   遅れて届く。この残留 LF を中断キーと誤認すると mon が1サンプルで止まる。よって CR/LF は
+      //   読み飛ばし、非改行バイトのみを中断トリガーにする。
+      if (i + 1 < count) {
+        unsigned long start = millis();
+        bool aborted = false;
+        while (millis() - start < 500) {
+          if (Serial.available()) {
+            int c = Serial.read();
+            if (c >= 0 && c != '\r' && c != '\n') {
+              while (Serial.available()) {
+                Serial.read();  // 残りの入力も読み捨てて中断
+              }
+              aborted = true;
+              break;
+            }
+            // CR/LF（コマンド確定の残留改行）は読み飛ばして待機を継続する
+          }
+        }
+        if (aborted) {
+          Serial.println("imu mon: 中断しました");
+          break;
+        }
+      }
+    }
+    return 0;
+  }
+
+  Serial.println("usage: imu [init|stat|cal|mon [n]]");
+  return -1;
+}
+
 static int cmd_todo(int /*argc*/, char** argv) {
   Serial.print(argv[0]);
   Serial.println(" : 未実装。Phase2 の該当 Issue で hal モジュールを結線して実装します。");
@@ -252,6 +409,12 @@ void setup() {
   delay(500);  // 起動直後の出力安定待ち（Serial は CP210x UART で接続検知不可）
 
   g_motor.begin();  // モータ6ピンを出力設定（起動直後は停止のまま）
+
+  // 9軸センサは setup() で初期化しない。Adafruit begin() はソフトリセット後の CHIP_ID 待ちが
+  // 無限ループになり得る（一度 ACK 後にブラウンアウト/活線抜けで応答が戻らない場合）。ここで呼ぶと
+  // シェル全体が起動前にハングし、無関係なコマンドも使えなくなる。初期化は 'imu init' のオンデマンドに
+  // して、起動（プロンプト表示）を絶対に止めないようにする（gotchas B9）。
+  Serial.println("imu: 9軸センサ(BNO055)は 'imu init' で初期化してください");
 
   ntshell_init(&ntshell, func_read, func_write, func_callback, (void*)(&ntshell));
   ntshell_set_prompt(&ntshell, PROMPT_STR);

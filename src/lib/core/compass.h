@@ -40,6 +40,15 @@ double normalizeHeading(double deg);
 // ナビ制御（#18）で「目標方位まであと何度どちら回りか」に使う基礎関数。
 double shortestDelta(double fromDeg, double toDeg);
 
+// BNO055 Euler ヘディングレジスタ(0x1A=LSB, 0x1B=MSB)の生2バイトを方位[deg, 0..360)へ変換する。
+// 1度 = 16 LSB（データシート §3.6.5.4 / Adafruit getVector(VECTOR_EULER).x() と同一換算）。
+// lsb=下位, msb=上位 をリトルエンディアンの int16 として合成し、normalizeHeading で [0,360)
+// を担保。 HAL（src/lib/hal/bno055）が自前 Wire
+// 読みで得た生バイトを渡す。バイト合成の符号/エンディアンは
+// ターゲット(32bit)依存の罠になりやすいため、ここで純粋ロジックとしてホストテストする（gotchas
+// A）。
+double eulerHeadingFromRaw(uint8_t lsb, uint8_t msb);
+
 // BNO055 のキャリブレーション状態。各値 0-3（3=完了。software.md §5.6）。
 //   system: 融合系全体 / gyro: ジャイロ / accel: 加速度 / mag: 地磁気
 struct CalibrationStatus {
