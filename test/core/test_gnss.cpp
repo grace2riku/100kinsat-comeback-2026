@@ -9,7 +9,7 @@
 #include <limits>
 
 #include "doctest.h"
-#include "gnss.h"
+#include "gnss_fix.h"
 
 // 妥当な 3D FIX のひな形（種子島付近）。各テストで一部だけ書き換えて使う。
 static gnss::GnssFix makeGoodFix() {
@@ -17,7 +17,7 @@ static gnss::GnssFix makeGoodFix() {
   f.posDataExist = true;
   f.fixMode = gnss::kFix3D;
   f.numSatellites = 8;
-  f.latitude = 30.401;    // 種子島宇宙センター付近
+  f.latitude = 30.401;  // 種子島宇宙センター付近
   f.longitude = 130.971;
   f.velocity = 0.0f;
   f.direction = 0.0f;
@@ -136,6 +136,6 @@ TEST_CASE("isUsableForNavigation: 測位不能(posDataExist=0)なら HDOP 良好
 TEST_CASE("isUsableForNavigation: maxHdop を厳しく指定すると中精度を弾ける") {
   gnss::GnssFix f = makeGoodFix();
   f.hdop = 3.0f;
-  CHECK(gnss::isUsableForNavigation(f, 5.0f));       // 既定なら許容
+  CHECK(gnss::isUsableForNavigation(f, 5.0f));        // 既定なら許容
   CHECK_FALSE(gnss::isUsableForNavigation(f, 2.0f));  // 厳しめなら弾く
 }

@@ -25,6 +25,7 @@
 #include "compass.h"
 #include "motor.h"
 #include "ntshell.h"
+#include "spresense_gnss.h"
 #include "spresense_pins.h"
 extern "C" {
 #include "ntshell_spresense_arduino.h"
@@ -42,6 +43,9 @@ static motor::MotorDriver g_motor(g_gpio, hal::kMotorLeft, hal::kMotorRight);
 // 9軸センサ（BNO055, I2C 0x28）。begin() の成否を g_imu_ok に保持する。
 static hal::Bno055Compass g_imu;
 
+// GNSS（Spresense 内蔵）。begin() で COLD_START、update() でノンブロッキングに最新測位を読む。
+static hal::SpresenseGnss g_gnss;
+
 // ---- コマンドハンドラ（HW依存。0=成功）----
 static int cmd_help(int argc, char** argv);
 static int cmd_led(int argc, char** argv);
@@ -49,6 +53,7 @@ static int cmd_cds(int argc, char** argv);
 static int cmd_beep(int argc, char** argv);
 static int cmd_motor(int argc, char** argv);
 static int cmd_imu(int argc, char** argv);
+static int cmd_gnss(int argc, char** argv);
 static int cmd_todo(int argc, char** argv);  // Phase2 で実装予定のスタブ
 
 static const cli::Command kCommands[] = {
@@ -58,7 +63,7 @@ static const cli::Command kCommands[] = {
     {"beep", "beep <freq_hz> <ms> : スピーカ(D09)を鳴らす", cmd_beep},
     {"motor", "motor <forward|back|left|right|stop> [duty 0-255] [ms] : モータ駆動", cmd_motor},
     {"imu", "imu [init|stat|cal|mon [n]] : 9軸センサ(BNO055)の方位/校正/状態を読む", cmd_imu},
-    {"gnss", "gnss : GNSS測位（Issue #10 で実装）", cmd_todo},
+    {"gnss", "gnss [init|mon [n]] : GNSS測位の状態/位置/品質を読む", cmd_gnss},
     {"log", "log : 制御履歴ログ（Issue #14 で実装）", cmd_todo},
 };
 static const int kCommandCount = sizeof(kCommands) / sizeof(kCommands[0]);

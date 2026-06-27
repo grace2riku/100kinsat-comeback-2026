@@ -1,9 +1,13 @@
-#ifndef CORE_GNSS_H
-#define CORE_GNSS_H
+#ifndef CORE_GNSS_FIX_H
+#define CORE_GNSS_FIX_H
 
 #include <cstdint>
 
-// gnss - GNSS 測位データの妥当性・品質判定（ハードウェア非依存）
+// gnss_fix - GNSS 測位データの妥当性・品質判定（ハードウェア非依存）
+//
+// ファイル名を gnss_fix.h としているのは、Spresense システムヘッダ <GNSS.h> と
+// 大文字小文字を区別しないファイルシステム（macOS 等）で衝突するのを避けるため。
+// core/gnss.h だと hal の `#include <GNSS.h>` がこちらへ誤解決される（gotchas C5）。
 //
 // Spresense 内蔵 GNSS（Issue #10）から得た測位スナップショット（SpNavData 相当）を、
 // Spresense GNSS.h に依存せず「走行に使える位置か」を判定する純粋ロジック。
@@ -69,4 +73,4 @@ bool isUsableForNavigation(const GnssFix& fix, float maxHdop = kDefaultMaxHdop);
 
 }  // namespace gnss
 
-#endif  // CORE_GNSS_H
+#endif  // CORE_GNSS_FIX_H

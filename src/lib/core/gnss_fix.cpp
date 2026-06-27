@@ -1,4 +1,4 @@
-#include "gnss.h"
+#include "gnss_fix.h"
 
 #include <cmath>
 

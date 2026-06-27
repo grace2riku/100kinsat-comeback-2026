@@ -4,19 +4,23 @@
 #include <Arduino.h>
 #include <GNSS.h>
 
-#include "gnss.h"  // core: GnssFix と妥当性/品質判定（HW非依存・ホストテスト済）
+#include "gnss_fix.h"  // core: GnssFix と妥当性/品質判定（HW非依存・ホストテスト済）
 
 // spresense_gnss.h - Spresense 内蔵 GNSS の実機ラッパ（hal層, Spresense GNSS.h 依存）
 //
-// Spresense の SpzGnss を薄く包み、HW非依存ロジック src/lib/core/gnss が判定できる形
+// Spresense の SpGnss を薄く包み、HW非依存ロジック src/lib/core/gnss が判定できる形
 // （gnss::GnssFix）へ SpNavData を変換して返す。GNSS.h（Spresense Boards 同梱）に依存するため
 // 実機ビルド（arduino-cli）でのみ使う。位置の妥当性・品質判定（FIX/HDOP）のロジックは core 側
-// （test/core/test_gnss.cpp でホストテスト）にあり、本ラッパは NT-Shell の gnss コマンドで実機確認する。
+// （test/core/test_gnss.cpp でホストテスト）にあり、本ラッパは NT-Shell の gnss
+// コマンドで実機確認する。
 //
-// ファイル名を hal/spresense_gnss.h としているのは、core/gnss.h と同名衝突を避けるため
-// （arduino-cli は src/lib/core と src/lib/hal を両方 include パスへ入れる）。
+// ファイル名を hal/spresense_gnss.h としているのは、Spresense システムヘッダ <GNSS.h> と
+// 大文字小文字を区別しないファイルシステム（macOS 等）で衝突するのを避けるため
+// （arduino-cli は src/lib/core と src/lib/hal を両方 include パスへ入れるので、もし
+//  core 側が gnss.h だと下の `#include <GNSS.h>` がそちらへ誤解決される。core は
+//  gnss_fix.h。gotchas C5）。
 //
-// 型名 SpzGnss / 各 API は 100kinsat-spresense のサンプル（src/basic/gnss/gnss.ino）と
+// 型名 SpGnss / 各 API は 100kinsat-spresense のサンプル（src/basic/gnss/gnss.ino）と
 // software.md §5.5 に準拠する。実機ビルドで型名・シグネチャを最終確認すること。
 //
 // 設計:
@@ -37,7 +41,8 @@ class SpresenseGnss {
       begun_ = false;
       return false;
     }
-    // L1 帯の GPS/GLONASS に準天頂衛星（QZSS L1C/A）を加える（日本での可視性向上）。software.md §5.5。
+    // L1 帯の GPS/GLONASS に準天頂衛星（QZSS L1C/A）を加える（日本での可視性向上）。software.md
+    // §5.5。
     gnss_.select(GPS);
     gnss_.select(GLONASS);
     gnss_.select(QZ_L1CA);
@@ -78,7 +83,7 @@ class SpresenseGnss {
   }
 
  private:
-  SpzGnss gnss_;
+  SpGnss gnss_;
   bool begun_ = false;
 };
 

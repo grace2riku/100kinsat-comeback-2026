@@ -56,7 +56,7 @@
 | C2 | （一般則）ヘッダ宣言と実装、ドキュメントとコードの不一致 | 対の更新漏れ | シグネチャ・定数・手順を変えたら、宣言／実装／ドキュメント／テストの**4点セット**を同時に更新 |
 | C3 | スクリプト(precheck/CI)と運用ドキュメントで、同一ツール（codex 等）の起動主体・自動/手動・前提が食い違う | 仕組みを再設計したのにドキュメント側の役割表・手順名を更新し忘れる | スクリプトの**ステップ名・前提（誰が・自動か手動か）**と `development_workflow.md` の §5/§7 役割表は**対で更新**する。`code-reviewer` サブエージェント自身のレビューで検出（自己ドッグフーディング） |
 | C4 | ローカルゲート(`precheck.sh`)が CI の一部ジョブを既定で省き、ローカル緑でも PR で落ちる（例: 引数なしだと Arduino ビルドをスキップ） | 「CI先取り」と謳いつつ CI の全ジョブをミラーしていなかった | `precheck.sh` は **CI(.github/workflows/ci.yml) の全ジョブ**（host-test/lint/arduino-build）を既定で先取りする。CI 側のビルド対象（`blink_led`/`flight`/`shell`）を変えたら precheck の既定リストも対で更新する |
-| C5 | `src/lib/core/gnss.h` と `src/lib/hal/gnss.h` を同名にすると、`#include "gnss.h"` が**どちらを指すか曖昧**になりビルドが意図しない側を拾う/壊れる | arduino-cli は `src/lib/core` と `src/lib/hal` を**両方とも include パスへ入れる**ため、同名ヘッダが衝突する | core と HAL で**同名ヘッダを作らない**。HAL 側は別名（`spresense_gnss.h`）にして衝突を回避する。新規 HAL ヘッダを足すときは core 側に同名が無いか確認する |
+| C5 | 自前ヘッダ名が **Spresense/サードパーティのシステムヘッダと大文字小文字を区別しないファイルシステム（macOS 等）で衝突**する。例: core に `gnss.h` を置くと、HAL の `#include <GNSS.h>`（Spresense GNSS ライブラリ）が **`src/lib/core/gnss.h` に誤解決**され、`SpGnss`/`SpNavData`/`COLD_START` 未定義でビルド不能。**Linux(CI) は大小区別するので通り、mac␣ローカルだけ落ちる**ため気づきにくい。arduino-cli の依存検出も `GNSS.h` を「解決済み」と見なし GNSS ライブラリを include パスへ追加しない（`ResolveLibrary(GNSS.h)` が出ない／`Used library` に GNSS が無いのが兆候） | arduino-cli は `src/lib/core`・`src/lib/hal` を**両方 include パスへ入れる**＋ macOS は**大小無視**で照合するため、`gnss.h` と `<GNSS.h>` が同一視される（core/hal 同名衝突の一般化） | 自前ヘッダは**システムヘッダと大小無視でも衝突しない名前**にする。GNSS の妥当性判定 core は `gnss.h` ではなく **`gnss_fix.h`**（HAL は `spresense_gnss.h`）。新規ヘッダ追加時は、依存する各ライブラリのヘッダ名（`GNSS.h`/`Wire.h` 等）と**大小無視で一致しないか**を確認する。検証は `--clean` 付きでも再現する（キャッシュではない） |
 
 ---
 
