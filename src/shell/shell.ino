@@ -11,8 +11,8 @@
  *   - 各コマンドの実体（HW依存）: 本スケッチ内のハンドラ
  *
  * コマンド:
- *   - help / led / cds / beep / motor / imu は実動作
- *   - gnss / log は Phase2 で hal モジュールを結線して実装するスタブ
+ *   - help / led / cds / beep / motor / imu / gnss は実動作
+ *   - log は Phase2 で hal モジュールを結線して実装するスタブ
  *
  * シリアル: 115200 bps
  */
@@ -351,7 +351,7 @@ static int cmd_imu(int argc, char** argv) {
 }
 
 // 最新の測位スナップショットを1行で表示する。座標は hasPositionFix で、走行可否は
-// isUsableForNavigation（FIX かつ HDOP 良好）で判定する（いずれも core/gnss のホストテスト済ロジック）。
+// isUsableForNavigation（FIX かつ HDOP 良好）で判定する（いずれも core/gnss_fix のホストテスト済ロジック）。
 static void print_gnss(const gnss::GnssFix& fix) {
   Serial.print("sat=");
   Serial.print(fix.numSatellites);
@@ -537,6 +537,8 @@ void setup() {
   // シェル全体が起動前にハングし、無関係なコマンドも使えなくなる。初期化は 'imu init' のオンデマンドに
   // して、起動（プロンプト表示）を絶対に止めないようにする（gotchas B9）。
   Serial.println("imu: 9軸センサ(BNO055)は 'imu init' で初期化してください");
+  // GNSS も同様に setup() で測位を待ち切らない（COLD_START は FIX まで数十秒〜数分。gotchas B15）。
+  Serial.println("gnss: 内蔵GNSSは 'gnss init' で初期化してください（FIX まで屋外で数十秒〜数分）");
 
   ntshell_init(&ntshell, func_read, func_write, func_callback, (void*)(&ntshell));
   ntshell_set_prompt(&ntshell, PROMPT_STR);

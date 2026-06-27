@@ -10,7 +10,7 @@
 本書はその計測手順と記録テンプレートを兼ねる。屋外計測の結果を埋めてコミットし、Issue #10 のHW依存DoDを満たしたうえでマージする（HWモジュールのマージゲート: 実機確認まで Issue をクローズしない）。
 
 対象コマンド: シェル（`src/shell`）の `gnss [init|mon [n]]`
-測位源: Spresense **内蔵 GNSS**（`GNSS.h`。外付け配線なし）。判定ロジックは `src/lib/core/gnss`、測位取得は `src/lib/hal` の Gnss ラッパが担う。hardware.md / software.md §5.5 参照。
+測位源: Spresense **内蔵 GNSS**（`GNSS.h`。外付け配線なし）。判定ロジックは `src/lib/core/gnss_fix`、測位取得は `src/lib/hal` の `SpresenseGnss` ラッパが担う。hardware.md / software.md §5.5 参照。
 
 ---
 
@@ -114,17 +114,17 @@ gnss
 
 ## 5. 出力の読み方（3状態）
 
-`print_gnss` は FIX/HDOP 判定（core/gnss のホストテスト済ロジック）に基づき末尾を3状態で出し分ける:
+`print_gnss` は FIX/HDOP 判定（core/gnss_fix のホストテスト済ロジック）に基づき末尾を3状態で出し分ける:
 
-| 末尾表示 | 条件（core/gnss） | 意味 | 走行に使えるか |
+| 末尾表示 | 条件（core/gnss_fix） | 意味 | 走行に使えるか |
 |---|---|---|---|
-| `-> No Position（測位不能：屋外・天空視界を確保）` | `hasPositionFix==false`（`posDataExist=0` または `fixMode` が 1/Invalid・化け値） | 位置が測位できていない。`pos` 自体を表示しない | ✕（座標が不定） |
+| `-> No Position（測位不能：屋外・天空視界を確保）` | `hasPositionFix==false`（`posDataExist=0` / `fixMode` が 1/Invalid・化け値 / 座標範囲外 / 座標が `(0,0)`） | 位置が測位できていない。`pos` 自体を表示しない | ✕（座標が不定） |
 | `-> FIXあり/精度不足（HDOP が高い or 0）` | `hasPositionFix==true` だが `isUsableForNavigation==false`（HDOP が `maxHdop` 超 or `hdop<=0`） | FIX はあるが精度が実用域に届かない | ✕（精度不足） |
 | `-> 走行可（FIX・精度良好）` | `hasPositionFix==true` かつ `isUsableForNavigation==true`（HDOP が `(0, 5.0]`） | FIX かつ精度良好。ナビに使える | ◯ |
 
 HDOP（水平精度劣化指数）の読み方:
 - **小さいほど高精度**（理想 ≤1、良好 ≤2、中 ≤5）。
-- 走行可の境界は既定 `maxHdop = 5.0`（`src/lib/core/gnss.h` の `kDefaultMaxHdop`。実機の収束を見て調整可）。
+- 走行可の境界は既定 `maxHdop = 5.0`（`src/lib/core/gnss_fix.h` の `kDefaultMaxHdop`。実機の収束を見て調整可）。
 - **`hdop = 0` は「未取得/無効」の典型値**で、高精度（0=完璧）と誤認しないよう**無効として弾く**（判定は `hdop > 0 && hdop <= maxHdop`）。負値・NaN も同様に範囲外で弾かれる。
 - `fixMode` は仕様上 1/2/3 のみ。化けた値（4以上）を FIX と誤認しないよう範囲一致で判定している。
 
@@ -146,7 +146,7 @@ HDOP（水平精度劣化指数）の読み方:
 
 本手順は**実機の物理的な測位取得**を確認するためのもの。位置づけを明確にしておく:
 
-- **HW非依存ロジックはホストテスト済**: 目標地点との距離・方位計算（`geo`）と、FIX/HDOP 判定（`core/gnss`：`hasPositionFix` / `isUsableForNavigation`）は `test/core/` で検証済み。座標が妥当なら正しく走行可否を返すことは構成的に担保されている。
+- **HW非依存ロジックはホストテスト済**: 目標地点との距離・方位計算（`geo`）と、FIX/HDOP 判定（`core/gnss_fix`：`hasPositionFix` / `isUsableForNavigation`）は `test/core/` で検証済み。座標が妥当なら正しく走行可否を返すことは構成的に担保されている。
 - **実機で確認すべき DoD**: 屋外で実際に FIX を取得し、§5 の3状態表示が定義どおり出ること。特に
   - **測位不能（`posDataExist=0`）** のとき `No Position` が出て `pos` を表示しないこと、
   - **低精度（HDOP が高い/0）** のとき `FIXあり/精度不足` が出ること、

@@ -61,9 +61,11 @@ struct GnssFix {
 bool isValidCoordinate(double latDeg, double lonDeg);
 
 // 位置が測位できているか（座標を使ってよいか）。
-//   posDataExist==true かつ fixMode が 2D/3D かつ 座標が妥当範囲。
+//   posDataExist==true かつ fixMode が 2D/3D かつ 座標が妥当範囲 かつ (0,0) でない。
 // posFixMode は仕様上 1/2/3 のみ。化けた値（4以上）を「FIX」と誤認しないよう
 // >= ではなく 2D..3D の範囲一致で判定する（compass::isFullyCalibrated と同じ安全側）。
+// さらに FIX 主張時でも座標がちょうど (0,0)（Null Island）は未確定値として弾く多層防御
+// を行う（フラグと座標の整合を信用せず、値レベルでも (0,0) を排除）。
 bool hasPositionFix(const GnssFix& fix);
 
 // 走行に使える品質か。hasPositionFix かつ HDOP が (0, maxHdop] の範囲。

@@ -8,7 +8,7 @@
 
 // spresense_gnss.h - Spresense 内蔵 GNSS の実機ラッパ（hal層, Spresense GNSS.h 依存）
 //
-// Spresense の SpGnss を薄く包み、HW非依存ロジック src/lib/core/gnss が判定できる形
+// Spresense の SpGnss を薄く包み、HW非依存ロジック src/lib/core/gnss_fix が判定できる形
 // （gnss::GnssFix）へ SpNavData を変換して返す。GNSS.h（Spresense Boards 同梱）に依存するため
 // 実機ビルド（arduino-cli）でのみ使う。位置の妥当性・品質判定（FIX/HDOP）のロジックは core 側
 // （test/core/test_gnss.cpp でホストテスト）にあり、本ラッパは NT-Shell の gnss
@@ -42,10 +42,12 @@ class SpresenseGnss {
       return false;
     }
     // L1 帯の GPS/GLONASS に準天頂衛星（QZSS L1C/A）を加える（日本での可視性向上）。software.md
-    // §5.5。
-    gnss_.select(GPS);
-    gnss_.select(GLONASS);
-    gnss_.select(QZ_L1CA);
+    // §5.5。select は失敗時 <0
+    // を返すため、一つでも失敗したら初期化失敗として扱う（実機切り分けのため）。
+    if (gnss_.select(GPS) != 0 || gnss_.select(GLONASS) != 0 || gnss_.select(QZ_L1CA) != 0) {
+      begun_ = false;
+      return false;
+    }
     if (gnss_.start(COLD_START) != 0) {  // 受信履歴なしから初期化
       begun_ = false;
       return false;

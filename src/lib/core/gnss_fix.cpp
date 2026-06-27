@@ -19,7 +19,16 @@ bool hasPositionFix(const GnssFix& fix) {
   }
   // posFixMode は仕様上 1/2/3 のみ。化け値(4以上)を FIX と誤認しないよう範囲一致で判定する。
   const bool fixOk = (fix.fixMode == kFix2D || fix.fixMode == kFix3D);
-  return fixOk && isValidCoordinate(fix.latitude, fix.longitude);
+  if (!fixOk || !isValidCoordinate(fix.latitude, fix.longitude)) {
+    return false;
+  }
+  // 多層防御: FIX を主張していても座標がちょうど (0,0)（Null Island）は未確定値とみなして弾く。
+  // posDataExist=1/fixMode=3 でも座標フィールドに 0 が残る異常を、フラグだけでなく値でも拒否する。
+  // (0,0) は本ミッション（種子島 ~30N/131E）では物理的にあり得ないため安全側（gotchas B12）。
+  if (fix.latitude == 0.0 && fix.longitude == 0.0) {
+    return false;
+  }
+  return true;
 }
 
 bool isUsableForNavigation(const GnssFix& fix, float maxHdop) {
