@@ -345,6 +345,123 @@ static int cmd_imu(int argc, char** argv) {
   return -1;
 }
 
+// 最新の測位スナップショットを1行で表示する。座標は hasPositionFix で、走行可否は
+// isUsableForNavigation（FIX かつ HDOP 良好）で判定する（いずれも core/gnss のホストテスト済ロジック）。
+static void print_gnss(const gnss::GnssFix& fix) {
+  Serial.print("sat=");
+  Serial.print(fix.numSatellites);
+  Serial.print(" fixMode=");
+  Serial.print(fix.fixMode);  // 1:Invalid 2:2D 3:3D
+  if (gnss::hasPositionFix(fix)) {
+    Serial.print(" pos=");
+    Serial.print(fix.latitude, 6);
+    Serial.print(",");
+    Serial.print(fix.longitude, 6);
+    Serial.print(" hdop=");
+    Serial.print(fix.hdop, 2);
+    Serial.print(" vel=");
+    Serial.print(fix.velocity, 2);
+    if (gnss::isUsableForNavigation(fix)) {
+      Serial.println("  -> 走行可（FIX・精度良好）");
+    } else {
+      Serial.println("  -> FIXあり/精度不足（HDOP が高い or 0）");
+    }
+  } else {
+    Serial.println("  -> No Position（測位不能：屋外・天空視界を確保）");
+  }
+}
+
+// 最大 timeoutMs だけ update をポーリングし、最初の1更新を表示する。GNSS は約1Hz 更新のため
+// 単発取得でも最大1秒程度待つ。非改行キー入力で打ち切り（aborted!=nullptr のとき *aborted=true）。
+// CR/LF（コマンド確定の残留改行）は中断トリガーにしない（gotchas B10）。
+static int gnss_read_once(unsigned long timeoutMs, bool* aborted) {
+  unsigned long start = millis();
+  gnss::GnssFix fix;
+  while (millis() - start < timeoutMs) {
+    if (g_gnss.update(fix)) {
+      print_gnss(fix);
+      return 0;
+    }
+    if (Serial.available()) {
+      int c = Serial.read();
+      if (c >= 0 && c != '\r' && c != '\n') {
+        while (Serial.available()) {
+          Serial.read();
+        }
+        if (aborted != nullptr) {
+          *aborted = true;
+        }
+        return -1;
+      }
+    }
+  }
+  Serial.println("gnss: 更新待ちタイムアウト（衛星未捕捉？ 屋外で天空視界を確保し再試行）");
+  return -1;
+}
+
+// gnss [init|mon [n]]
+//   gnss         : 最新の測位を1回読む（最大2秒、更新を1つ待って表示）
+//   gnss init    : GNSS を初期化し測位開始（COLD_START。FIX まで屋外で数十秒〜数分）
+//   gnss mon [n] : n回（既定20・上限120）測位を読み続ける（FIX 収束の観察用）
+// 注: 読み取り専用で HW を駆動しないため安全（gotchas B5）。mon 中も非改行キーで即中断する。
+static int cmd_gnss(int argc, char** argv) {
+  if (argc > 3) {
+    Serial.println("usage: gnss [init|mon [n]]");
+    return -1;
+  }
+
+  // init は未初期化でも試せるよう、ready 判定より前に処理する。
+  if (argc >= 2 && strcmp(argv[1], "init") == 0) {
+    if (argc != 2) {
+      Serial.println("usage: gnss init");
+      return -1;
+    }
+    bool ok = g_gnss.begin();
+    Serial.println(ok ? "gnss: 初期化OK（COLD_START。FIX まで屋外で数十秒〜数分）"
+                      : "gnss: 初期化失敗（GNSS begin/start エラー。電源・アンテナを確認）");
+    return ok ? 0 : -1;
+  }
+
+  if (!g_gnss.ready()) {
+    Serial.println("gnss: 未初期化。'gnss init' で初期化してください");
+    return -1;
+  }
+
+  if (argc == 1) {
+    return gnss_read_once(2000, nullptr);  // 最大2秒で1更新
+  }
+
+  if (strcmp(argv[1], "mon") == 0) {
+    const int kMaxCount = 120;
+    int count = 20;  // 既定回数
+    if (argc == 3) {
+      if (!cli::parseInt(argv[2], count) || count < 1 || count > kMaxCount) {
+        Serial.print("回数は 1-");
+        Serial.print(kMaxCount);
+        Serial.println(" の整数");
+        return -1;
+      }
+    }
+    for (int i = 0; i < count; i++) {
+      Serial.print("[");
+      Serial.print(i + 1);
+      Serial.print("/");
+      Serial.print(count);
+      Serial.print("] ");
+      bool aborted = false;
+      gnss_read_once(2000, &aborted);
+      if (aborted) {
+        Serial.println("gnss mon: 中断しました");
+        break;
+      }
+    }
+    return 0;
+  }
+
+  Serial.println("usage: gnss [init|mon [n]]");
+  return -1;
+}
+
 static int cmd_todo(int /*argc*/, char** argv) {
   Serial.print(argv[0]);
   Serial.println(" : 未実装。Phase2 の該当 Issue で hal モジュールを結線して実装します。");

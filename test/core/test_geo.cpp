@@ -79,3 +79,30 @@ TEST_CASE("bearingDegrees: 往路と復路の方位は約180度ずれる") {
   while (diff < 0) diff += 360.0;
   CHECK(diff == doctest::Approx(180.0).epsilon(1e-3));
 }
+
+// --- 境界ケース（Issue #10 DoD: 極近接 / 日付変更線）---
+
+TEST_CASE("distanceMeters: 極近接（経度1e-5度差）でも0でない正の距離を返す") {
+  // 北緯35°で経度を 1e-5 度だけ東へ。解析値 ≈ 0.9109 m（haversine の数値的に潰れない範囲）。
+  double d = geo::distanceMeters(35.0, 139.0, 35.0, 139.00001);
+  CHECK(d == doctest::Approx(0.9109).epsilon(1e-3));
+  CHECK(d > 0.0);
+}
+
+TEST_CASE("bearingDegrees: 極近接でも方位は正しく真東(90度)") {
+  CHECK(geo::bearingDegrees(35.0, 139.0, 35.0, 139.00001) == doctest::Approx(90.0).epsilon(1e-4));
+}
+
+TEST_CASE("distanceMeters: 日付変更線をまたいでも距離は最短(約22.24m)") {
+  // 経度 179.9999 → -179.9999。素朴な経度差(-359.9998°)ではなく実距離 0.0002° ぶん ≈ 22.24 m。
+  double d = geo::distanceMeters(0.0, 179.9999, 0.0, -179.9999);
+  CHECK(d == doctest::Approx(22.239).epsilon(1e-3));
+  // 距離は対称（向きに依らない）
+  CHECK(geo::distanceMeters(0.0, -179.9999, 0.0, 179.9999) == doctest::Approx(d));
+}
+
+TEST_CASE("bearingDegrees: 日付変更線をまたぐ東向きは90度、西向きは270度") {
+  // 179.9999 → -179.9999 は東へ少し進む（真東 90°）。逆は真西 270°。
+  CHECK(geo::bearingDegrees(0.0, 179.9999, 0.0, -179.9999) == doctest::Approx(90.0).epsilon(1e-4));
+  CHECK(geo::bearingDegrees(0.0, -179.9999, 0.0, 179.9999) == doctest::Approx(270.0).epsilon(1e-4));
+}
