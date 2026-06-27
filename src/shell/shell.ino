@@ -216,15 +216,18 @@ static void print_calibration(const compass::CalibrationStatus& c) {
 // 方位角とキャリブレーションを1回読んで表示する（共通処理）。
 static int imu_read_once() {
   double h = g_imu.heading();
-  if (!compass::isValidHeading(h)) {
-    Serial.println("imu: 方位取得に失敗（無効値）");
-    return -1;
-  }
+  bool valid = compass::isValidHeading(h);
   Serial.print("heading = ");
-  Serial.print(h, 1);
-  Serial.println(" deg");
+  if (valid) {
+    Serial.print(h, 1);
+    Serial.println(" deg");
+  } else {
+    // 読み取り失敗は 0.0(=真北) ではなく無効として明示する（gotchas B8/B11）。校正行は別 I2C
+    // 読みなので、失敗時も続けて表示し mon での校正収束観察を妨げない。
+    Serial.println("(invalid: I2C読み取り失敗)");
+  }
   print_calibration(g_imu.calibration());
-  return 0;
+  return valid ? 0 : -1;
 }
 
 // imu [init|stat|cal|mon [n]]

@@ -26,7 +26,7 @@ namespace hal {
 class Bno055Compass {
  public:
   // addr: I2C アドレス（秋月電子の出荷時 0x28、ジャンパ変更で 0x29）。software.md §5.6。
-  explicit Bno055Compass(uint8_t addr = 0x28) : bno_(-1, addr, &Wire) {}
+  explicit Bno055Compass(uint8_t addr = 0x28) : bno_(-1, addr, &Wire), addr_(addr) {}
 
   // 検出・初期化し外部クロックを有効化する。false=未検出（I2C 配線/アドレス/電源を疑う）。
   // 既定動作モードは NDOF（加速+地磁気+ジャイロ融合、地磁気校正あり）。
@@ -52,21 +52,53 @@ class Bno055Compass {
   // begin() が成功済みか。
   bool ready() const { return begun_; }
 
-  // 方位角 [0,360)[deg]。未初期化なら kInvalidHeading（NaN）を返す。
-  // Euler ベクトルの x() を heading として扱い、compass で [0,360) の不変条件を担保する。
-  // 注意1: 基準(北=0)・回転の向き(時計回りで増加か)は BNO055 の軸定義と基板取付向きに依存し、
-  //        未検証。実機で確認し（imu_bringup 手順C）、オフセット/符号の吸収は #18 で行う。
-  // 注意2: getVector は I2C 読み取り失敗時もゼロ初期化値(全軸0)を返すが、**水平で真北なら正常時も
-  //        0.0 になり得る**（Euler は 1°=16LSB 量子化）。よって heading()
-  //        単体では「読み取り失敗」と
-  //        「真北」を値で区別できない。ハード故障(活線抜け/ブラウンアウト)の検知はデータ値ではなく
-  //        別経路の healthy()/systemStatus() で行うこと（gotchas B8）。
+  // 方位角 [0,360)[deg]。未初期化、または I2C 読み取り失敗（リトライ尽き）なら kInvalidHeading。
+  // Euler ヘディングレジスタ(0x1A=LSB,0x1B=MSB)を自前 Wire 読みし、トランザクションの成否を
+  // endTransmission()/requestFrom() の戻り値で判定する（Spresense Wire: 0=成功 / requestFrom は
+  // 失敗時 0）。値の合成・正規化は compass::eulerHeadingFromRaw（ホストテスト済）に委ねる。
+  // なぜ Adafruit getVector を使わないか（gotchas B8/B11）: getVector は readLen
+  // の成否(bool)を捨て、
+  //   読み取り失敗時もゼロ値→0.0(=真北と区別不能) を返す。走行制御に 0.0 を流すと「北を向いている」
+  //   と誤認するため、本ラッパは読み取り失敗を検知して **kInvalidHeading** を返す（呼び出し側は
+  //   isValidHeading で弾ける）。走行中の振動/EMI による瞬断（imu_bringup 手順B
+  //   参照）に対する保険。
+  // 注意: Wire コアは失敗時に "ERROR: Failed to read from i2c" を自前 printf
+  // する（抑止不可）。その行は
+  //   リトライ毎に出るが、最終的な健全判断は本戻り値（無効値か否か）で行う。基準(北=0)・回転向きの
+  //   物理的正しさは未検証で、オフセット/符号の吸収は #18（imu_bringup 手順C）。
   double heading() {
     if (!begun_) {
       return compass::kInvalidHeading;
     }
-    imu::Vector<3> euler = bno_.getVector(Adafruit_BNO055::VECTOR_EULER);
-    return compass::normalizeHeading(euler.x());
+    for (uint8_t attempt = 0; attempt < kReadAttempts; ++attempt) {
+      double h = 0.0;
+      if (tryReadHeading(h)) {
+        return h;
+      }
+      if (attempt + 1 < kReadAttempts) {
+        delay(kRetryDelayMs);  // 一過性の瞬断はわずかな待ちで回復しうる
+      }
+    }
+    return compass::kInvalidHeading;  // 全リトライ失敗 → 無効値（0.0=北 を返さない）
+  }
+
+  // 方位を1回だけ読む（リトライ・delay なし）。成功時 true で out に [0,360)、失敗時 false（out
+  // 不変）。 リトライ方針を呼び出し側の制御周期予算に委ねたい用途（#18
+  // のナビ制御など）はこちらを使い、 「周期内で1回試行→失敗なら次周期で再試行」にして HAL 内 delay
+  // でブロックしないこと （gotchas B5: 停止応答性／`delay` 一括回避, B11:
+  // リトライ方針は周期予算を知る層に出す）。 heading() はこれを kReadAttempts
+  // 回まで包んだ簡便版（mon/単発読み向け）。
+  bool tryReadHeading(double& out) {
+    if (!begun_) {
+      return false;
+    }
+    uint8_t lsb = 0;
+    uint8_t msb = 0;
+    if (!readEulerHeadingRaw(lsb, msb)) {
+      return false;
+    }
+    out = compass::eulerHeadingFromRaw(lsb, msb);
+    return true;
   }
 
   // キャリブレーション状態（各0-3）。未初期化なら全0を返す。
@@ -116,7 +148,48 @@ class Bno055Compass {
   bool healthy() { return systemStatus().status == 5; }
 
  private:
+  // Euler ヘディング(レジスタ 0x1A:LSB, 0x1B:MSB)を自前 Wire で読む。I2C
+  // トランザクションが成功すれば true を返し lsb/msb を埋める。失敗（NACK/読み取り不能）は
+  // false。Adafruit の private read を使わず
+  // 最小限のレジスタ読みを自前実装し、成否を呼び出し側に返せるようにする（gotchas B11）。
+  // 手順: レジスタポインタを書き込み（endTransmission(false)=repeated start, 0=成功）→ 2バイト要求
+  //   （requestFrom は成功時 2・失敗時 0 を返す, Wire.cpp）。
+  bool readEulerHeadingRaw(uint8_t& lsb, uint8_t& msb) {
+    // 前提: デバイスは PAGE 0（0x1A は PAGE 0 のレジスタ）。Adafruit の begin()/config 操作が
+    // PAGE 0 を担保する。将来 PAGE 1（config レジスタ）を触る機能を足すなら、戻し忘れると本読みが
+    // 別レジスタを int16 解釈して「もっともらしい誤方位」を無効値にせず返すため、PAGE
+    // 戻しを保証すること。
+    constexpr uint8_t kEulerHeadingLsbReg = 0x1A;  // BNO055_EULER_H_LSB_ADDR
+    Wire.beginTransmission(addr_);
+    Wire.write(kEulerHeadingLsbReg);
+    if (Wire.endTransmission(false) != 0) {  // 0=TWI_SUCCESS。NACK 等は非0
+      return false;
+    }
+    if (Wire.requestFrom(addr_, static_cast<uint8_t>(2)) != 2) {
+      // Spresense Wire は失敗時 rx バッファを再投入せず available()==0 のため実質 no-op だが、
+      // 他コア（標準 AVR Wire 等）移植時に端数を持ち越さない保険として残す。
+      while (Wire.available()) {
+        Wire.read();
+      }
+      return false;
+    }
+    int lo = Wire.read();
+    int hi = Wire.read();
+    if (lo < 0 || hi < 0) {  // available 不足（requestFrom==2 なら来ないが防御的に）
+      return false;
+    }
+    lsb = static_cast<uint8_t>(lo);
+    msb = static_cast<uint8_t>(hi);
+    return true;
+  }
+
+  // 読み取りリトライ回数と間隔。一過性の瞬断（振動/EMI）を吸収しつつ、ホットループを長く
+  // ブロックしない範囲（最悪 (kReadAttempts-1)*kRetryDelayMs ≒ 10ms）に抑える。
+  static constexpr uint8_t kReadAttempts = 3;
+  static constexpr uint8_t kRetryDelayMs = 5;
+
   Adafruit_BNO055 bno_;
+  uint8_t addr_;  // bno_ 内部アドレスと同一値（自前 Wire 読み readEulerHeadingRaw 用に保持）
   bool begun_ = false;
 };
 

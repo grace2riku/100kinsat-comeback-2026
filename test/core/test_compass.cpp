@@ -148,3 +148,43 @@ TEST_CASE("校正判定: 仕様外(>3)の化け値を『完了』と誤判定し
   CHECK_FALSE(compass::isHeadingReady({255, 3, 3, 3}));  // system 化け
   CHECK_FALSE(compass::isHeadingReady({3, 3, 3, 9}));    // mag 化け
 }
+
+// ---- eulerHeadingFromRaw: 生 Euler レジスタ2バイト → 方位[0,360) ------------
+// BNO055 の Euler ヘディングは 1度 = 16 LSB（§3.6.5.4）。HAL が自前 Wire 読みで得た
+// 生バイト（LSB, MSB）の合成を、符号/エンディアンの罠（ターゲット≠ホスト, gotchas A）
+// が出ないようホストで固定する。値は Adafruit getVector(VECTOR_EULER).x() と一致する。
+
+TEST_CASE("eulerHeadingFromRaw: スケール換算 1度=16LSB（主要方位）") {
+  CHECK(compass::eulerHeadingFromRaw(0x00, 0x00) == doctest::Approx(0.0));       // 0 LSB
+  CHECK(compass::eulerHeadingFromRaw(0xA0, 0x05) == doctest::Approx(90.0));      // 1440 LSB
+  CHECK(compass::eulerHeadingFromRaw(0x40, 0x0B) == doctest::Approx(180.0));     // 2880 LSB
+  CHECK(compass::eulerHeadingFromRaw(0xE0, 0x10) == doctest::Approx(270.0));     // 4320 LSB
+  CHECK(compass::eulerHeadingFromRaw(0x7F, 0x16) == doctest::Approx(359.9375));  // 5759 LSB(最大)
+}
+
+TEST_CASE("eulerHeadingFromRaw: リトルエンディアン（LSB/MSB の取り違えを弾く）") {
+  // 第1引数=下位バイト, 第2引数=上位バイト。256 LSB = 16.0°。
+  CHECK(compass::eulerHeadingFromRaw(0x00, 0x01) == doctest::Approx(16.0));
+  // バイトを入れ替えると 1 LSB = 0.0625°。取り違えれば 16.0 にならず、本テストが検出する。
+  CHECK(compass::eulerHeadingFromRaw(0x01, 0x00) == doctest::Approx(0.0625));
+}
+
+TEST_CASE("eulerHeadingFromRaw: 負の int16（化け値）も正方向へ正規化して [0,360) を保つ") {
+  // 0xFFF0 を符号付き16bitで解釈すると -16 LSB = -1.0° → 正規化で 359.0°。
+  // unsigned で誤解釈すると 65520/16=4095° になり、この CHECK で破綻が露見する。
+  CHECK(compass::eulerHeadingFromRaw(0xF0, 0xFF) == doctest::Approx(359.0));
+}
+
+TEST_CASE("eulerHeadingFromRaw: 360°相当(5760 LSB)は境界で 0 に畳む") {
+  CHECK(compass::eulerHeadingFromRaw(0x80, 0x16) == doctest::Approx(0.0));  // 5760 LSB = 360°
+}
+
+TEST_CASE("eulerHeadingFromRaw: 戻り値は常に [0,360) に収まる") {
+  for (int hi = 0; hi < 256; hi += 17) {
+    for (int lo = 0; lo < 256; lo += 17) {
+      double h = compass::eulerHeadingFromRaw(static_cast<uint8_t>(lo), static_cast<uint8_t>(hi));
+      CHECK(h >= 0.0);
+      CHECK(h < 360.0);
+    }
+  }
+}

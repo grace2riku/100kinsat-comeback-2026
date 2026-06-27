@@ -39,6 +39,14 @@ double shortestDelta(double fromDeg, double toDeg) {
   return d;  // (-180, 180]
 }
 
+double eulerHeadingFromRaw(uint8_t lsb, uint8_t msb) {
+  // リトルエンディアンの符号付き16bitとして合成（BNO055 のレジスタ並びに一致）。
+  // ホスト(64bit int)と異なり int16_t の桁あふれ/符号拡張はターゲット依存の罠（gotchas A）。
+  int16_t raw =
+      static_cast<int16_t>(static_cast<uint16_t>(lsb) | (static_cast<uint16_t>(msb) << 8));
+  return normalizeHeading(static_cast<double>(raw) / 16.0);  // 1度=16LSB → [0,360)
+}
+
 uint8_t minCalibration(const CalibrationStatus& c) {
   uint8_t m = c.system;
   if (c.gyro < m) {
