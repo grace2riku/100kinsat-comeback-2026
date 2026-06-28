@@ -400,7 +400,9 @@ static int gnss_read_once(unsigned long timeoutMs, bool* aborted) {
       }
     }
   }
-  Serial.println("gnss: 更新待ちタイムアウト（衛星未捕捉？ 屋外で天空視界を確保し再試行）");
+  // waitUpdate(0) で約1Hz の更新をこの2秒窓で1つも拾えなかった場合。FIX 済みでも更新位相の
+  // ずれで時々出るため「衛星未捕捉」と断定しない（誤解防止）。未FIX が続く場合のみ天空視界を疑う。
+  Serial.println("gnss: この周期は更新なし（約1Hz。未FIXが続く場合は屋外で天空視界を確保し再試行）");
   return -1;
 }
 
