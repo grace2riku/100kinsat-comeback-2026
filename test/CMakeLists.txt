@@ -18,5 +18,6 @@ add_core_test(test_geo core/test_geo.cpp)
 add_core_test(test_cli core/test_cli.cpp)
 add_core_test(test_motor core/test_motor.cpp)
 add_core_test(test_compass core/test_compass.cpp)
+add_core_test(test_gnss core/test_gnss.cpp)
 # motor テストは実機と同じピン定数（src/lib/hal/spresense_pins.h, Arduino非依存）を参照する。
 target_include_directories(test_motor PRIVATE ${CMAKE_SOURCE_DIR}/src/lib/hal)

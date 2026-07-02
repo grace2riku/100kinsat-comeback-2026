@@ -11,8 +11,8 @@
  *   - 各コマンドの実体（HW依存）: 本スケッチ内のハンドラ
  *
  * コマンド:
- *   - help / led / cds / beep / motor / imu は実動作
- *   - gnss / log は Phase2 で hal モジュールを結線して実装するスタブ
+ *   - help / led / cds / beep / motor / imu / gnss は実動作
+ *   - log は Phase2 で hal モジュールを結線して実装するスタブ
  *
  * シリアル: 115200 bps
  */
@@ -25,6 +25,7 @@
 #include "compass.h"
 #include "motor.h"
 #include "ntshell.h"
+#include "spresense_gnss.h"
 #include "spresense_pins.h"
 extern "C" {
 #include "ntshell_spresense_arduino.h"
@@ -42,6 +43,9 @@ static motor::MotorDriver g_motor(g_gpio, hal::kMotorLeft, hal::kMotorRight);
 // 9軸センサ（BNO055, I2C 0x28）。begin() の成否を g_imu_ok に保持する。
 static hal::Bno055Compass g_imu;
 
+// GNSS（Spresense 内蔵）。begin() で COLD_START、update() でノンブロッキングに最新測位を読む。
+static hal::SpresenseGnss g_gnss;
+
 // ---- コマンドハンドラ（HW依存。0=成功）----
 static int cmd_help(int argc, char** argv);
 static int cmd_led(int argc, char** argv);
@@ -49,6 +53,7 @@ static int cmd_cds(int argc, char** argv);
 static int cmd_beep(int argc, char** argv);
 static int cmd_motor(int argc, char** argv);
 static int cmd_imu(int argc, char** argv);
+static int cmd_gnss(int argc, char** argv);
 static int cmd_todo(int argc, char** argv);  // Phase2 で実装予定のスタブ
 
 static const cli::Command kCommands[] = {
@@ -58,7 +63,7 @@ static const cli::Command kCommands[] = {
     {"beep", "beep <freq_hz> <ms> : スピーカ(D09)を鳴らす", cmd_beep},
     {"motor", "motor <forward|back|left|right|stop> [duty 0-255] [ms] : モータ駆動", cmd_motor},
     {"imu", "imu [init|stat|cal|mon [n]] : 9軸センサ(BNO055)の方位/校正/状態を読む", cmd_imu},
-    {"gnss", "gnss : GNSS測位（Issue #10 で実装）", cmd_todo},
+    {"gnss", "gnss [init|mon [n]] : GNSS測位の状態/位置/品質を読む", cmd_gnss},
     {"log", "log : 制御履歴ログ（Issue #14 で実装）", cmd_todo},
 };
 static const int kCommandCount = sizeof(kCommands) / sizeof(kCommands[0]);
@@ -345,6 +350,125 @@ static int cmd_imu(int argc, char** argv) {
   return -1;
 }
 
+// 最新の測位スナップショットを1行で表示する。座標は hasPositionFix で、走行可否は
+// isUsableForNavigation（FIX かつ HDOP 良好）で判定する（いずれも core/gnss_fix のホストテスト済ロジック）。
+static void print_gnss(const gnss::GnssFix& fix) {
+  Serial.print("sat=");
+  Serial.print(fix.numSatellites);
+  Serial.print(" fixMode=");
+  Serial.print(fix.fixMode);  // 1:Invalid 2:2D 3:3D
+  if (gnss::hasPositionFix(fix)) {
+    Serial.print(" pos=");
+    Serial.print(fix.latitude, 6);
+    Serial.print(",");
+    Serial.print(fix.longitude, 6);
+    Serial.print(" hdop=");
+    Serial.print(fix.hdop, 2);
+    Serial.print(" vel=");
+    Serial.print(fix.velocity, 2);
+    if (gnss::isUsableForNavigation(fix)) {
+      Serial.println("  -> 走行可（FIX・精度良好）");
+    } else {
+      Serial.println("  -> FIXあり/精度不足（HDOP が高い or 0）");
+    }
+  } else {
+    Serial.println("  -> No Position（測位不能：屋外・天空視界を確保）");
+  }
+}
+
+// 最大 timeoutMs だけ update をポーリングし、最初の1更新を表示する。GNSS は約1Hz 更新のため
+// 単発取得でも最大1秒程度待つ。非改行キー入力で打ち切り（aborted!=nullptr のとき *aborted=true）。
+// CR/LF（コマンド確定の残留改行）は中断トリガーにしない（gotchas B10）。
+static int gnss_read_once(unsigned long timeoutMs, bool* aborted) {
+  unsigned long start = millis();
+  gnss::GnssFix fix;
+  while (millis() - start < timeoutMs) {
+    if (g_gnss.update(fix)) {
+      print_gnss(fix);
+      return 0;
+    }
+    if (Serial.available()) {
+      int c = Serial.read();
+      if (c >= 0 && c != '\r' && c != '\n') {
+        while (Serial.available()) {
+          Serial.read();
+        }
+        if (aborted != nullptr) {
+          *aborted = true;
+        }
+        return -1;
+      }
+    }
+  }
+  // waitUpdate(0) で約1Hz の更新をこの2秒窓で1つも拾えなかった場合。FIX 済みでも更新位相の
+  // ずれで時々出るため「衛星未捕捉」と断定しない（誤解防止）。未FIX が続く場合のみ天空視界を疑う。
+  Serial.println("gnss: この周期は更新なし（約1Hz。未FIXが続く場合は屋外で天空視界を確保し再試行）");
+  return -1;
+}
+
+// gnss [init|mon [n]]
+//   gnss         : 最新の測位を1回読む（最大2秒、更新を1つ待って表示）
+//   gnss init    : GNSS を初期化し測位開始（COLD_START。FIX まで屋外で数十秒〜数分）
+//   gnss mon [n] : n回（既定20・上限120）測位を読み続ける（FIX 収束の観察用）
+// 注: 読み取り専用で HW を駆動しないため安全（gotchas B5）。mon 中も非改行キーで即中断する。
+static int cmd_gnss(int argc, char** argv) {
+  if (argc > 3) {
+    Serial.println("usage: gnss [init|mon [n]]");
+    return -1;
+  }
+
+  // init は未初期化でも試せるよう、ready 判定より前に処理する。
+  if (argc >= 2 && strcmp(argv[1], "init") == 0) {
+    if (argc != 2) {
+      Serial.println("usage: gnss init");
+      return -1;
+    }
+    bool ok = g_gnss.begin();
+    Serial.println(ok ? "gnss: 初期化OK（COLD_START。FIX まで屋外で数十秒〜数分）"
+                      : "gnss: 初期化失敗（GNSS begin/start エラー。電源・アンテナを確認）");
+    return ok ? 0 : -1;
+  }
+
+  if (!g_gnss.ready()) {
+    Serial.println("gnss: 未初期化。'gnss init' で初期化してください");
+    return -1;
+  }
+
+  if (argc == 1) {
+    return gnss_read_once(2000, nullptr);  // 最大2秒で1更新
+  }
+
+  if (strcmp(argv[1], "mon") == 0) {
+    const int kMaxCount = 120;
+    int count = 20;  // 既定回数
+    if (argc == 3) {
+      if (!cli::parseInt(argv[2], count) || count < 1 || count > kMaxCount) {
+        Serial.print("回数は 1-");
+        Serial.print(kMaxCount);
+        Serial.println(" の整数");
+        return -1;
+      }
+    }
+    for (int i = 0; i < count; i++) {
+      Serial.print("[");
+      Serial.print(i + 1);
+      Serial.print("/");
+      Serial.print(count);
+      Serial.print("] ");
+      bool aborted = false;
+      gnss_read_once(2000, &aborted);
+      if (aborted) {
+        Serial.println("gnss mon: 中断しました");
+        break;
+      }
+    }
+    return 0;
+  }
+
+  Serial.println("usage: gnss [init|mon [n]]");
+  return -1;
+}
+
 static int cmd_todo(int /*argc*/, char** argv) {
   Serial.print(argv[0]);
   Serial.println(" : 未実装。Phase2 の該当 Issue で hal モジュールを結線して実装します。");
@@ -415,6 +539,8 @@ void setup() {
   // シェル全体が起動前にハングし、無関係なコマンドも使えなくなる。初期化は 'imu init' のオンデマンドに
   // して、起動（プロンプト表示）を絶対に止めないようにする（gotchas B9）。
   Serial.println("imu: 9軸センサ(BNO055)は 'imu init' で初期化してください");
+  // GNSS も同様に setup() で測位を待ち切らない（COLD_START は FIX まで数十秒〜数分。gotchas B15）。
+  Serial.println("gnss: 内蔵GNSSは 'gnss init' で初期化してください（FIX まで屋外で数十秒〜数分）");
 
   ntshell_init(&ntshell, func_read, func_write, func_callback, (void*)(&ntshell));
   ntshell_set_prompt(&ntshell, PROMPT_STR);
