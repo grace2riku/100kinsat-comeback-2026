@@ -7,6 +7,7 @@
 #include <Wire.h>
 
 #include "compass.h"
+#include "landing.h"
 
 // bno055.h - 9軸センサ BNO055 の実機ラッパ（hal層, Arduino/Adafruit 依存）
 //
@@ -98,6 +99,44 @@ class Bno055Compass {
       return false;
     }
     out = compass::eulerHeadingFromRaw(lsb, msb);
+    return true;
+  }
+
+  // 加速度3軸 [m/s^2]（重力を含む生の加速度）を読む。成功時 true で out を埋め、未初期化 or
+  // I2C 読み取り失敗（NACK/バイト不足）は false（out 不変）。着地(静止)検知 core/landing へ渡す。
+  // heading() と同じく Adafruit getVector を使わず自前 Wire 読みで成否を返す（gotchas B8/B11）:
+  //   getVector は読み取り失敗時もゼロ→(0,0,0)=|a|0 を返すため、失敗を静止判定へ流すと危険
+  //   （※ landing 側は |a|≒g を要求するので (0,0,0) では誤着地しないが、瞬断を静止扱いしないため
+  //     成否を明示的に返して呼び出し側でゲートできるようにする）。値の換算は
+  //   landing::accelFromRaw（ホストテスト済）に委ねる。
+  bool readAcceleration(landing::Accel3& out) {
+    if (!begun_) {
+      return false;
+    }
+    // ACCEL_DATA_X_LSB(0x08) から 6 バイト（X/Y/Z の LSB,MSB）。PAGE 0 前提（heading と同様）。
+    constexpr uint8_t kAccelDataXLsbReg = 0x08;  // BNO055_ACCEL_DATA_X_LSB_ADDR
+    Wire.beginTransmission(addr_);
+    Wire.write(kAccelDataXLsbReg);
+    if (Wire.endTransmission(false) != 0) {  // repeated start。0=成功
+      return false;
+    }
+    if (Wire.requestFrom(addr_, static_cast<uint8_t>(6)) != 6) {
+      while (Wire.available()) {
+        Wire.read();
+      }
+      return false;
+    }
+    uint8_t b[6];
+    for (uint8_t i = 0; i < 6; ++i) {
+      int v = Wire.read();
+      if (v < 0) {  // available 不足（requestFrom==6 なら来ないが防御的に）
+        return false;
+      }
+      b[i] = static_cast<uint8_t>(v);
+    }
+    out.x = landing::accelFromRaw(b[0], b[1]);
+    out.y = landing::accelFromRaw(b[2], b[3]);
+    out.z = landing::accelFromRaw(b[4], b[5]);
     return true;
   }
 

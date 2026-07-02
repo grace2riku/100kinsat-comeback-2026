@@ -11,7 +11,7 @@
  *   - 各コマンドの実体（HW依存）: 本スケッチ内のハンドラ
  *
  * コマンド:
- *   - help / led / cds / beep / motor / imu / gnss は実動作
+ *   - help / led / cds / beep / motor / imu / gnss / land は実動作
  *   - log は Phase2 で hal モジュールを結線して実装するスタブ
  *
  * シリアル: 115200 bps
@@ -23,6 +23,7 @@
 #include "bno055.h"
 #include "cli.h"
 #include "compass.h"
+#include "landing.h"
 #include "motor.h"
 #include "ntshell.h"
 #include "spresense_gnss.h"
@@ -43,6 +44,10 @@ static motor::MotorDriver g_motor(g_gpio, hal::kMotorLeft, hal::kMotorRight);
 // 9軸センサ（BNO055, I2C 0x28）。begin() の成否を g_imu_ok に保持する。
 static hal::Bno055Compass g_imu;
 
+// 着地(静止)検知器（HW非依存ロジック core/landing）。g_imu の加速度を逐次与えて静止→着地を判定。
+// 既定設定（窓20・静止1秒で確定）。しきい値は実機で調整する暫定値。
+static landing::LandingDetector g_landing;
+
 // GNSS（Spresense 内蔵）。begin() で COLD_START、update() でノンブロッキングに最新測位を読む。
 static hal::SpresenseGnss g_gnss;
 
@@ -54,6 +59,7 @@ static int cmd_beep(int argc, char** argv);
 static int cmd_motor(int argc, char** argv);
 static int cmd_imu(int argc, char** argv);
 static int cmd_gnss(int argc, char** argv);
+static int cmd_land(int argc, char** argv);
 static int cmd_todo(int argc, char** argv);  // Phase2 で実装予定のスタブ
 
 static const cli::Command kCommands[] = {
@@ -64,6 +70,7 @@ static const cli::Command kCommands[] = {
     {"motor", "motor <forward|back|left|right|stop> [duty 0-255] [ms] : モータ駆動", cmd_motor},
     {"imu", "imu [init|stat|cal|mon [n]] : 9軸センサ(BNO055)の方位/校正/状態を読む", cmd_imu},
     {"gnss", "gnss [init|mon [n]] : GNSS測位の状態/位置/品質を読む", cmd_gnss},
+    {"land", "land [mon [n]] : 加速度から着地(静止)を検知（要 imu init）", cmd_land},
     {"log", "log : 制御履歴ログ（Issue #14 で実装）", cmd_todo},
 };
 static const int kCommandCount = sizeof(kCommands) / sizeof(kCommands[0]);
@@ -466,6 +473,110 @@ static int cmd_gnss(int argc, char** argv) {
   }
 
   Serial.println("usage: gnss [init|mon [n]]");
+  return -1;
+}
+
+// 加速度を1回読み、大きさ|a|・窓の平均/分散・静止継続時間・着地状態を1行表示し、
+// 検知器 g_landing へ1サンプル与える。読み取り失敗時は false（検知器へは与えない）。
+// 状態表示は core/landing の判定（isStillNow/hasLanded、ホストテスト済）に基づく。
+static bool land_feed_and_print(double dtMs) {
+  landing::Accel3 a;
+  if (!g_imu.readAcceleration(a)) {
+    Serial.println("land: 加速度読み取り失敗（I2C。配線/初期化を確認）");
+    return false;
+  }
+  g_landing.update(a, dtMs);
+  Serial.print("|a|=");
+  Serial.print(a.magnitude(), 2);
+  Serial.print(" mean=");
+  Serial.print(g_landing.meanMagnitude(), 2);
+  Serial.print(" var=");
+  Serial.print(g_landing.variance(), 3);
+  Serial.print(" still=");
+  Serial.print(g_landing.stillElapsedMs(), 0);
+  Serial.print("ms");
+  if (g_landing.hasLanded()) {
+    Serial.println("  -> 着地検知（静止確定）");
+  } else if (g_landing.isStillNow()) {
+    Serial.println("  -> 静止中（着地確定待ち）");
+  } else if (g_landing.windowFull()) {
+    Serial.println("  -> 運動中");
+  } else {
+    Serial.println("  -> 計測中（窓充填中）");
+  }
+  return true;
+}
+
+// land [mon [n]]
+//   land         : 加速度を1回読み、大きさ|a|と状態を表示（検知器をリセットして単発観測）
+//   land mon [n] : n回（既定100・上限600）加速度を約50ms周期で読み、静止→着地確定を観測する
+// 前提: 加速度は g_imu（BNO055）から読むため 'imu init' が必要。
+// 注: 読み取り専用で HW を駆動しないため安全（gotchas B5）。mon 中も非改行キーで即中断する。
+static int cmd_land(int argc, char** argv) {
+  if (argc > 3) {
+    Serial.println("usage: land [mon [n]]");
+    return -1;
+  }
+  if (!g_imu.ready()) {
+    Serial.println("land: 9軸センサ未初期化。'imu init' で初期化してください");
+    return -1;
+  }
+
+  if (argc == 1) {
+    g_landing.reset();  // 単発観測。窓充填前なので状態は「計測中」になる
+    return land_feed_and_print(0.0) ? 0 : -1;
+  }
+
+  if (strcmp(argv[1], "mon") == 0) {
+    const int kMaxCount = 600;
+    int count = 100;  // 既定回数（約50ms周期で 5 秒。窓20充填後に静止1秒で着地確定）
+    if (argc == 3) {
+      if (!cli::parseInt(argv[2], count) || count < 1 || count > kMaxCount) {
+        Serial.print("回数は 1-");
+        Serial.print(kMaxCount);
+        Serial.println(" の整数");
+        return -1;
+      }
+    }
+    g_landing.reset();
+    unsigned long prev = 0;  // 前サンプルの時刻（0=初回）
+    for (int i = 0; i < count; i++) {
+      Serial.print("[");
+      Serial.print(i + 1);
+      Serial.print("/");
+      Serial.print(count);
+      Serial.print("] ");
+      // 前サンプルからの実経過[ms]を dt として与える（初回は 0＝継続時間の起点）。
+      unsigned long now = millis();
+      double dtMs = (prev == 0) ? 0.0 : static_cast<double>(now - prev);
+      prev = now;
+      land_feed_and_print(dtMs);
+      // 約50ms インターバル。非改行キーで残りを打ち切る（gotchas B10: CR/LF は読み飛ばす）。
+      if (i + 1 < count) {
+        unsigned long start = millis();
+        bool aborted = false;
+        while (millis() - start < 50) {
+          if (Serial.available()) {
+            int c = Serial.read();
+            if (c >= 0 && c != '\r' && c != '\n') {
+              while (Serial.available()) {
+                Serial.read();
+              }
+              aborted = true;
+              break;
+            }
+          }
+        }
+        if (aborted) {
+          Serial.println("land mon: 中断しました");
+          break;
+        }
+      }
+    }
+    return 0;
+  }
+
+  Serial.println("usage: land [mon [n]]");
   return -1;
 }
 
