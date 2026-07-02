@@ -523,8 +523,12 @@ static int cmd_land(int argc, char** argv) {
   }
 
   if (argc == 1) {
-    g_landing.reset();  // 単発観測。窓充填前なので状態は「計測中」になる
-    return land_feed_and_print(0.0) ? 0 : -1;
+    // 単発は生 |a| 確認用。reset 直後・窓充填前なので状態は必ず「計測中」になる。
+    // 静止/着地の判定は継続サンプルが要るため 'land mon' を使う。
+    g_landing.reset();
+    bool ok = land_feed_and_print(0.0);
+    Serial.println("land: 静止/着地の判定は 'land mon' を使う（単発は |a| 確認用）");
+    return ok ? 0 : -1;
   }
 
   if (strcmp(argv[1], "mon") == 0) {
@@ -539,7 +543,8 @@ static int cmd_land(int argc, char** argv) {
       }
     }
     g_landing.reset();
-    unsigned long prev = 0;  // 前サンプルの時刻（0=初回）
+    unsigned long prev = 0;  // 前サンプルの時刻
+    bool havePrev = false;   // prev が有効か（millis()==0 の値と初回未設定を混同しない）
     for (int i = 0; i < count; i++) {
       Serial.print("[");
       Serial.print(i + 1);
@@ -548,8 +553,9 @@ static int cmd_land(int argc, char** argv) {
       Serial.print("] ");
       // 前サンプルからの実経過[ms]を dt として与える（初回は 0＝継続時間の起点）。
       unsigned long now = millis();
-      double dtMs = (prev == 0) ? 0.0 : static_cast<double>(now - prev);
+      double dtMs = havePrev ? static_cast<double>(now - prev) : 0.0;
       prev = now;
+      havePrev = true;
       land_feed_and_print(dtMs);
       // 約50ms インターバル。非改行キーで残りを打ち切る（gotchas B10: CR/LF は読み飛ばす）。
       if (i + 1 < count) {

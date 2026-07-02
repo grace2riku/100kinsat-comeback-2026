@@ -83,6 +83,13 @@ TEST_CASE("accelFromRaw: 負値（2の補数 int16）を正しく復元する") 
   CHECK(landing::accelFromRaw(0x2C, 0xFC) == doctest::Approx(-9.8));
 }
 
+TEST_CASE("accelFromRaw: int16 の極値（最小/最大）で桁溢れしない") {
+  // 0x8000 = -32768 → -327.68 m/s^2（最小）
+  CHECK(landing::accelFromRaw(0x00, 0x80) == doctest::Approx(-327.68));
+  // 0x7FFF = 32767 → 327.67 m/s^2（最大）
+  CHECK(landing::accelFromRaw(0xFF, 0x7F) == doctest::Approx(327.67));
+}
+
 // ---- 初期状態・窓充填 ----
 
 TEST_CASE("初期状態: 未着地・窓未充填・値は0") {
@@ -231,6 +238,25 @@ TEST_CASE("windowSize は 2..kMaxWindow にクランプされる") {
   // kMaxWindow(=64) 個入れれば充填されるはず（201個目まで待たされない）
   feedStill(d, landing::kMaxWindow, 10.0);
   CHECK(d.windowFull());
+}
+
+TEST_CASE("windowSize の下限は 2 にクランプされる（0/1 指定でも 2 で充填）") {
+  StillConfig c = testCfg();
+  c.windowSize = 0;  // 下限未満
+  LandingDetector d(c);
+  feedStill(d, 1, 50.0);
+  CHECK_FALSE(d.windowFull());  // 1個では満ちない（=下限2に丸められている）
+  feedStill(d, 1, 50.0);
+  CHECK(d.windowFull());  // 2個で充填
+}
+
+TEST_CASE("dtMs<0（負値）も時間経過なしとして継続時間を進めない") {
+  LandingDetector d(testCfg());
+  feedStill(d, 4, -50.0);  // 逆行時刻など。充填はされるが積算しない
+  CHECK(d.isStillNow());
+  feedStill(d, 4, -50.0);  // さらに投入しても
+  CHECK(d.stillElapsedMs() == doctest::Approx(0.0));
+  CHECK_FALSE(d.hasLanded());
 }
 
 TEST_CASE("dtMs<=0 は時間経過なしとして継続時間を進めない") {

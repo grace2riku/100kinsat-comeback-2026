@@ -75,6 +75,11 @@ LandingDetector::LandingDetector(const StillConfig& cfg) : cfg_(cfg) {
 }
 
 void LandingDetector::reset() {
+  // buf_ をゼロ埋めする。現状 mean/variance は count_ 範囲しか読まないため未初期化読みは
+  // 起きないが、将来読み範囲を変えてもゴミを読まないよう防御的に初期化する（レビュー L3）。
+  for (uint8_t i = 0; i < kMaxWindow; ++i) {
+    buf_[i] = 0.0;
+  }
   count_ = 0;
   head_ = 0;
   stillElapsedMs_ = 0.0;
