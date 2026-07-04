@@ -11,7 +11,7 @@
  *   - 各コマンドの実体（HW依存）: 本スケッチ内のハンドラ
  *
  * コマンド:
- *   - help / led / cds / beep / motor / imu / gnss / land は実動作
+ *   - help / led / cds / beep / motor / imu / gnss / land / separate は実動作
  *   - log は Phase2 で hal モジュールを結線して実装するスタブ
  *
  * シリアル: 115200 bps
@@ -26,6 +26,7 @@
 #include "landing.h"
 #include "motor.h"
 #include "ntshell.h"
+#include "separator.h"
 #include "spresense_gnss.h"
 #include "spresense_pins.h"
 extern "C" {
@@ -60,6 +61,7 @@ static int cmd_motor(int argc, char** argv);
 static int cmd_imu(int argc, char** argv);
 static int cmd_gnss(int argc, char** argv);
 static int cmd_land(int argc, char** argv);
+static int cmd_separate(int argc, char** argv);
 static int cmd_todo(int argc, char** argv);  // Phase2 で実装予定のスタブ
 
 static const cli::Command kCommands[] = {
@@ -71,6 +73,8 @@ static const cli::Command kCommands[] = {
     {"imu", "imu [init|stat|cal|mon [n]|i2cdiag [n]] : 9軸センサ(BNO055)の方位/校正/状態/I2C診断", cmd_imu},
     {"gnss", "gnss [init|mon [n]] : GNSS測位の状態/位置/品質を読む", cmd_gnss},
     {"land", "land [mon [n]] : 加速度から着地(静止)を検知（要 imu init）", cmd_land},
+    {"separate", "separate [ms|stop] : パラシュート切り離し電熱線(D06)を加熱（安全上限あり・⚠高温注意）",
+     cmd_separate},
     {"log", "log : 制御履歴ログ（Issue #14 で実装）", cmd_todo},
 };
 static const int kCommandCount = sizeof(kCommands) / sizeof(kCommands[0]);
@@ -702,6 +706,90 @@ static int cmd_land(int argc, char** argv) {
   return -1;
 }
 
+// separate [ms|stop]
+//   separate       : 電熱線(D06)を既定時間 加熱してパラシュートを切り離す（⚠加熱部は高温）
+//   separate <ms>  : 加熱時間[ms]を上書き（安全ハード上限 kMaxHeatMsCap にクランプ）
+//   separate stop  : D06 を LOW（非加熱）へ強制（保険。加熱は下記ループ中の非改行キーでも中断可）
+// 安全設計（Issue #13 / gotchas B5）:
+//   - core separator が加熱を heatMs で必ず自動停止する（上限ガード。多重起動防止・クランプ込み）。
+//   - 本コマンドは毎回ローカルの separator を生成し1パルスを撃つ。**どの終了経路（完了/中断/開始不可）
+//     でも最後に必ず D06 を LOW にする**（abort() を冗長に呼ぶ）ため、電熱線を HIGH のまま残さない。
+static int cmd_separate(int argc, char** argv) {
+  if (argc > 2) {
+    Serial.println("usage: separate [ms|stop]");
+    return -1;
+  }
+
+  // stop: D06 を LOW へ強制（begin() は出力設定＋LOW を行う安全初期化）。
+  // 注: separate はブロッキングで加熱中は次コマンドを受け付けないため、加熱の中断は下記ループ中の
+  //     非改行キーで行う。この stop は「万一 D06 が HIGH で残った時に手動で LOW へ戻す保険」。
+  if (argc == 2 && strcmp(argv[1], "stop") == 0) {
+    separator::ParachuteSeparator sep(g_gpio, hal::kHeatingWirePin);
+    sep.begin();
+    Serial.println("separate stop: D06 を LOW（非加熱）にしました");
+    return 0;
+  }
+
+  separator::SeparatorConfig cfg = separator::defaultSeparatorConfig();
+  if (argc == 2) {
+    int ms = 0;
+    if (!cli::parseInt(argv[1], ms) || ms < 1) {
+      Serial.println("加熱時間[ms]は 1 以上の整数（省略時は既定値）");
+      return -1;
+    }
+    cfg.heatMs = static_cast<double>(ms);  // クランプは separator 側（kMaxHeatMsCap）
+  }
+
+  separator::ParachuteSeparator sep(g_gpio, hal::kHeatingWirePin, cfg);
+  sep.begin();
+  Serial.print("⚠ 電熱線 D06 を加熱します（加熱部は高温・触れない）。heatMs=");
+  Serial.print(sep.config().heatMs, 0);
+  Serial.println(" ms。中断: 非改行キー");
+
+  if (!sep.start()) {
+    sep.abort();  // 念のため LOW を保証
+    Serial.println("separate: 開始できませんでした（D06 LOW）");
+    return -1;
+  }
+
+  unsigned long prev = millis();
+  bool aborted = false;
+  // 100ms 周期で経過を与えつつ加熱。core が heatMs 到達で自動 LOW にするまで回す。
+  while (sep.isHeating()) {
+    unsigned long now = millis();
+    sep.update(static_cast<double>(now - prev));
+    prev = now;
+    Serial.print("  D06=HIGH 加熱中 elapsed=");
+    Serial.print(sep.heatElapsedMs(), 0);
+    Serial.println(" ms");
+    if (!sep.isHeating()) {
+      break;  // このサンプルで上限到達→停止済み
+    }
+    // 約100ms 待つ間、非改行キーで中断（gotchas B10: CR/LF は読み飛ばす）。
+    unsigned long start = millis();
+    while (millis() - start < 100) {
+      if (Serial.available()) {
+        int c = Serial.read();
+        if (c >= 0 && c != '\r' && c != '\n') {
+          while (Serial.available()) {
+            Serial.read();
+          }
+          aborted = true;
+          break;
+        }
+      }
+    }
+    if (aborted) {
+      break;
+    }
+  }
+
+  sep.abort();  // 終了保証: どの経路でも必ず D06 を LOW にする（安全側・冗長でも呼ぶ）
+  Serial.println(aborted ? "separate: 中断しました（D06 LOW）"
+                         : "separate: 加熱完了（D06 LOW）");
+  return 0;
+}
+
 static int cmd_todo(int /*argc*/, char** argv) {
   Serial.print(argv[0]);
   Serial.println(" : 未実装。Phase2 の該当 Issue で hal モジュールを結線して実装します。");
@@ -762,6 +850,13 @@ static int func_callback(const char* text, void* /*extobj*/) {
 }
 
 void setup() {
+  // 最優先（誤加熱・発火防止）: 電源投入後できるだけ早く電熱線 D06 を出力＋LOW（非加熱）へ確定する。
+  // GPIO 操作は Serial 非依存なので Serial.begin より前に置き、ソフト側のブート窓を最小化する
+  // （gotchas B18）。ただしスケッチ起動前のブート期間は救えないため、恒久対策は FET ゲートの
+  // プルダウン抵抗（HW, separator_bringup.md 手順A）。以後の加熱は 'separate' が都度ローカル
+  // separator を生成して行う（一時オブジェクトだがピンの電気状態は残る）。
+  separator::ParachuteSeparator(g_gpio, hal::kHeatingWirePin).begin();
+
   Serial.begin(115200);
   delay(500);  // 起動直後の出力安定待ち（Serial は CP210x UART で接続検知不可）
 

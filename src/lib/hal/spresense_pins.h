@@ -21,6 +21,10 @@ constexpr motor::Pins kMotorLeft{7, 2, 3};
 // 右モータ = モータA結線: AIN1=D08, AIN2=D04, PWMA=D05
 constexpr motor::Pins kMotorRight{8, 4, 5};
 
+// 電熱線（パラシュート切り離し）駆動ピン: D06 → FET ゲート（hardware.md「電熱線駆動 D06」）。
+// HIGH で加熱、LOW で停止。安全のため起動直後は必ず LOW（separator::ParachuteSeparator::begin）。
+constexpr uint8_t kHeatingWirePin = 6;
+
 }  // namespace hal
 
 #endif  // HAL_SPRESENSE_PINS_H
