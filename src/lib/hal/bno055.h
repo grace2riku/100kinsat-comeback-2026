@@ -29,6 +29,13 @@ class Bno055Compass {
   // addr: I2C アドレス（秋月電子の出荷時 0x28、ジャンパ変更で 0x29）。software.md §5.6。
   explicit Bno055Compass(uint8_t addr = 0x28) : bno_(-1, addr, &Wire), addr_(addr) {}
 
+  // BNO055 の運用 I2C クロック[Hz]。Adafruit_BNO055::begin() が内部で setSpeed(50000) を呼び 50kHz
+  // を 設定する（Adafruit_BNO055.cpp / Adafruit_I2CDevice.cpp）。診断等で一時的に Wire.setClock
+  // を変えたら
+  // **必ずこの値へ戻す**こと（100kHz 等へ“戻す”と設定が持ち越されて運用クロックが変わる＝gotchas
+  // A5）。 復帰値をハードコードせず本定数を単一の出典にする（C2）。
+  static constexpr uint32_t kI2cClockHz = 50000;
+
   // 検出・初期化し外部クロックを有効化する。false=未検出（I2C 配線/アドレス/電源を疑う）。
   // 既定動作モードは NDOF（加速+地磁気+ジャイロ融合、地磁気校正あり）。
   // 注意（ハングしうる）: Adafruit の begin() は「最初から不在」なら ~850ms のタイムアウトで false
@@ -109,36 +116,64 @@ class Bno055Compass {
   //   （※ landing 側は |a|≒g を要求するので (0,0,0) では誤着地しないが、瞬断を静止扱いしないため
   //     成否を明示的に返して呼び出し側でゲートできるようにする）。値の換算は
   //   landing::accelFromRaw（ホストテスト済）に委ねる。
-  bool readAcceleration(landing::Accel3& out) {
+  // 加速度読みが失敗したフェーズ（I2C 信頼性の切り分け用）。ok=false のとき、どのI2C相で
+  // 落ちたかを示す。requestFrom 相への集中は「クロックストレッチ/融合コア busy」を、writeAddr 相は
+  // 「アドレスNACK/配線/プルアップ」を示唆する（imu i2cdiag が集計）。
+  enum class AccelReadPhase : uint8_t {
+    kOk,           // 成功
+    kNotBegun,     // 未初期化（begin 前）
+    kWriteAddr,    // レジスタポインタ書き込み＋repeated start（endTransmission(false)）が非0
+    kRequestFrom,  // 6バイト要求（requestFrom）が 6 未満
+    kShortRead,    // available 不足で read() が負（防御的：requestFrom==6 なら通常来ない）
+  };
+  struct AccelReadResult {
+    bool ok;
+    AccelReadPhase phase;
+    int code;  // kWriteAddr: endTransmission 戻り値 / kRequestFrom,kShortRead: 取得バイト数
+  };
+
+  // readAcceleration の内訳付き版。値の意味・換算は readAcceleration と同一で、失敗時に
+  // どのフェーズで落ちたか（phase/code）を返すだけ。着地検知は成否のみ要るので readAcceleration を
+  // 使い、I2C 失敗の原因切り分け（imu i2cdiag）だけがこちらを使う。
+  // sendStop: レジスタポインタ書き込み後に STOP を送るか。false=repeated start（既定・従来動作）、
+  //   true=STOP を挟んでから requestFrom で再START。BNO055 のクロックストレッチ下で
+  //   repeated-start のデータ相読みが落ちる問題（imu i2cdiag で確認）に対し、STOP
+  //   方式が改善するかを 実機A/Bで比較するための切替。BNO055 はレジスタポインタが STOP
+  //   をまたいで保持されるため、 どちらでも同じ6バイトを読める。
+  AccelReadResult readAccelerationDiag(landing::Accel3& out, bool sendStop = false) {
     if (!begun_) {
-      return false;
+      return AccelReadResult{false, AccelReadPhase::kNotBegun, -1};
     }
     // ACCEL_DATA_X_LSB(0x08) から 6 バイト（X/Y/Z の LSB,MSB）。PAGE 0 前提（heading と同様）。
     constexpr uint8_t kAccelDataXLsbReg = 0x08;  // BNO055_ACCEL_DATA_X_LSB_ADDR
     Wire.beginTransmission(addr_);
     Wire.write(kAccelDataXLsbReg);
-    if (Wire.endTransmission(false) != 0) {  // repeated start。0=成功
-      return false;
+    int tx = Wire.endTransmission(sendStop);  // false=repeated start / true=STOP。0=成功
+    if (tx != 0) {
+      return AccelReadResult{false, AccelReadPhase::kWriteAddr, tx};
     }
-    if (Wire.requestFrom(addr_, static_cast<uint8_t>(6)) != 6) {
+    int got = Wire.requestFrom(addr_, static_cast<uint8_t>(6));
+    if (got != 6) {
       while (Wire.available()) {
         Wire.read();
       }
-      return false;
+      return AccelReadResult{false, AccelReadPhase::kRequestFrom, got};
     }
     uint8_t b[6];
     for (uint8_t i = 0; i < 6; ++i) {
       int v = Wire.read();
       if (v < 0) {  // available 不足（requestFrom==6 なら来ないが防御的に）
-        return false;
+        return AccelReadResult{false, AccelReadPhase::kShortRead, i};
       }
       b[i] = static_cast<uint8_t>(v);
     }
     out.x = landing::accelFromRaw(b[0], b[1]);
     out.y = landing::accelFromRaw(b[2], b[3]);
     out.z = landing::accelFromRaw(b[4], b[5]);
-    return true;
+    return AccelReadResult{true, AccelReadPhase::kOk, 0};
   }
+
+  bool readAcceleration(landing::Accel3& out) { return readAccelerationDiag(out).ok; }
 
   // キャリブレーション状態（各0-3）。未初期化なら全0を返す。
   // 注意: Adafruit の getCalibration は void で I2C 読み取り失敗を通知しない。読めなかった場合は

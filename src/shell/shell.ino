@@ -68,7 +68,7 @@ static const cli::Command kCommands[] = {
     {"cds", "cds : 照度センサ(A0)の生値を表示", cmd_cds},
     {"beep", "beep <freq_hz> <ms> : スピーカ(D09)を鳴らす", cmd_beep},
     {"motor", "motor <forward|back|left|right|stop> [duty 0-255] [ms] : モータ駆動", cmd_motor},
-    {"imu", "imu [init|stat|cal|mon [n]] : 9軸センサ(BNO055)の方位/校正/状態を読む", cmd_imu},
+    {"imu", "imu [init|stat|cal|mon [n]|i2cdiag [n]] : 9軸センサ(BNO055)の方位/校正/状態/I2C診断", cmd_imu},
     {"gnss", "gnss [init|mon [n]] : GNSS測位の状態/位置/品質を読む", cmd_gnss},
     {"land", "land [mon [n]] : 加速度から着地(静止)を検知（要 imu init）", cmd_land},
     {"log", "log : 制御履歴ログ（Issue #14 で実装）", cmd_todo},
@@ -242,18 +242,87 @@ static int imu_read_once() {
   return valid ? 0 : -1;
 }
 
-// imu [init|stat|cal|mon [n]]
-//   imu          : 方位角とキャリブレーション状態を1回読む
-//   imu init     : センサを(再)初期化する（配線・電源を入れた後に試せる）
-//   imu stat     : システム状態（融合稼働/自己診断/エラー）を表示する＝読み取り健全性の確認
-//   imu cal      : キャリブレーション状態だけ表示する
-//   imu mon [n]  : n回（既定20・上限120）方位/校正を約0.5秒間隔で表示する（校正収束の観察用）
-// 注: mon は読み取り専用で HW を駆動しないため安全（gotchas B5）。長時間ブロックを避けるため
+// imu i2cdiag のワンパス実行（対策A/Bの単位）。加速度I2C読みを count 回「単発試行」し、生失敗率・
+// 失敗フェーズ内訳・周期内リトライ(3回×5ms)回復率を1行に集計する。sendStop/clockHz を変えて
+// トランザクション方式×クロックを実機比較するために使う。診断用途なので delay ベースで待つ（各パス
+// が短時間なため中断ポーリングは省略）。呼び出し後はクロックが clockHz のままになる点に注意（呼び出し
+// 側の i2cdiag が最後に 100kHz へ戻す）。
+static void imu_i2c_pass(const char* label, int count, unsigned long intervalMs, bool sendStop,
+                         uint32_t clockHz) {
+  Wire.setClock(clockHz);
+  int rawFail = 0;
+  int recovered = 0;
+  int hardFail = 0;
+  int failWriteAddr = 0;
+  int failRequestFrom = 0;
+  int failShortRead = 0;
+  for (int i = 0; i < count; i++) {
+    landing::Accel3 a;
+    hal::Bno055Compass::AccelReadResult r = g_imu.readAccelerationDiag(a, sendStop);
+    if (!r.ok) {
+      rawFail++;
+      if (r.phase == hal::Bno055Compass::AccelReadPhase::kWriteAddr) {
+        failWriteAddr++;
+      } else if (r.phase == hal::Bno055Compass::AccelReadPhase::kRequestFrom) {
+        failRequestFrom++;
+      } else if (r.phase == hal::Bno055Compass::AccelReadPhase::kShortRead) {
+        failShortRead++;
+      }
+      // 周期内リトライ（heading 相当: 追加2回×5ms = 合計3試行）で回復するか
+      bool ok = false;
+      for (int t = 0; t < 2; t++) {
+        delay(5);
+        if (g_imu.readAccelerationDiag(a, sendStop).ok) {
+          ok = true;
+          break;
+        }
+      }
+      if (ok) {
+        recovered++;
+      } else {
+        hardFail++;
+      }
+    }
+    if (i + 1 < count) {
+      delay(intervalMs);
+    }
+  }
+  Serial.print("[");
+  Serial.print(label);
+  Serial.print("] 生失敗 ");
+  Serial.print(rawFail);
+  Serial.print("/");
+  Serial.print(count);
+  Serial.print(" (");
+  Serial.print(count > 0 ? rawFail * 100.0 / count : 0.0, 1);
+  Serial.print("%)  内訳 wAddr=");
+  Serial.print(failWriteAddr);
+  Serial.print(" reqFrom=");
+  Serial.print(failRequestFrom);
+  Serial.print(" short=");
+  Serial.print(failShortRead);
+  Serial.print("  retry回復=");
+  Serial.print(recovered);
+  Serial.print("/");
+  Serial.print(rawFail);
+  Serial.print(" hardFail=");
+  Serial.println(hardFail);
+}
+
+// imu [init|stat|cal|mon [n]|i2cdiag [n]]
+//   imu            : 方位角とキャリブレーション状態を1回読む
+//   imu init       : センサを(再)初期化する（配線・電源を入れた後に試せる）
+//   imu stat       : システム状態（融合稼働/自己診断/エラー）を表示する＝読み取り健全性の確認
+//   imu cal        : キャリブレーション状態だけ表示する
+//   imu mon [n]    : n回（既定20・上限120）方位/校正を約0.5秒間隔で表示する（校正収束の観察用）
+//   imu i2cdiag [n]: 各パス n回（既定100・上限150）の加速度I2C読みを、repeated-start/STOP × 100k/50k の
+//                    4通りで連続測定し、生失敗率が最小の対策(方式×クロック)を実機で選ぶ
+// 注: mon/i2cdiag は読み取り専用で HW を駆動しないため安全（gotchas B5）。mon は長時間ブロックを避け
 //     インターバル中に Enter 以外のキー入力があれば即中断する（millis ベースのポーリング待ち）。
 //     CRLF の残留 LF を中断と誤認しないよう CR/LF は読み飛ばす（gotchas B10）。
 static int cmd_imu(int argc, char** argv) {
   if (argc > 3) {
-    Serial.println("usage: imu [init|stat|cal|mon [n]]");
+    Serial.println("usage: imu [init|stat|cal|mon [n]|i2cdiag [n]]");
     return -1;
   }
 
@@ -306,6 +375,53 @@ static int cmd_imu(int argc, char** argv) {
     return 0;
   }
 
+  if (strcmp(argv[1], "i2cdiag") == 0) {
+    // I2C 加速度読みの信頼性を切り分ける。原因は既に BNO055 のクロックストレッチと確定（失敗が
+    //   requestFrom 相に集中・writeAddr=0・SYS_ERR=0）。ここでは対策候補を実機A/Bする:
+    //   トランザクション方式(repeated-start vs STOP) × I2Cクロック(100k vs 50k) の 2×2 を、同一条件
+    //   （同じ n・同じ間隔）で連続測定し、生失敗率が最小の組合せを観測で選ぶ。
+    // 上限は4パス通しでも中断不能な待ち時間が過大にならない範囲に抑える（本コマンドは各パス間の
+    // キー中断を持たないため。150×4パス×~17ms ≒ 10秒台）。
+    const int kMaxCount = 150;
+    int count = 100;  // 各パスの試行回数（既定100・約17ms間隔で1パス約2秒）
+    if (argc == 3) {
+      if (!cli::parseInt(argv[2], count) || count < 1 || count > kMaxCount) {
+        Serial.print("回数は 1-");
+        Serial.print(kMaxCount);
+        Serial.println(" の整数");
+        return -1;
+      }
+    }
+    hal::Bno055Compass::SystemStatus s0 = g_imu.systemStatus();
+    Serial.print("i2cdiag: 開始 SYS status=");
+    Serial.print(s0.status);
+    Serial.print(" self_test=0x");
+    Serial.print(s0.selfTest, HEX);
+    Serial.print(" sys_error=");
+    Serial.println(s0.error);
+    Serial.print("i2cdiag: 各パス n=");
+    Serial.print(count);
+    Serial.println(" interval=17ms retry=3x@5ms（Wireコアの生ERROR行が失敗毎に出るのは正常）");
+    Serial.println("---- 対策A/B: 生失敗率が最小の (方式×クロック) を選ぶ ----");
+    // 融合更新(~100Hz=10ms)と非同調な間隔で代表的な失敗率を測る（10の整数倍を避ける）。
+    const unsigned long kIv = 17;
+    imu_i2c_pass("RS  100k", count, kIv, false, 100000);
+    imu_i2c_pass("STOP100k", count, kIv, true, 100000);
+    imu_i2c_pass("RS   50k", count, kIv, false, 50000);
+    imu_i2c_pass("STOP 50k", count, kIv, true, 50000);
+    // 運用クロックへ戻す。BNO055 の運用は Adafruit begin() が設定する 50kHz（kI2cClockHz）で、
+    // ここを 100kHz 等の想定値へ“戻す”と設定持ち越しで運用クロックが変わる（gotchas A5/B17）。
+    Wire.setClock(hal::Bno055Compass::kI2cClockHz);
+    hal::Bno055Compass::SystemStatus s1 = g_imu.systemStatus();
+    Serial.print("i2cdiag: 終了 SYS status=");
+    Serial.print(s1.status);
+    Serial.print(" sys_error=");
+    Serial.println(s1.error);
+    Serial.println("-> wAddr=0 かつ SYS_ERR=0 が保たれていればクロックストレッチ確定。");
+    Serial.println("   生失敗率が最小のパスの (方式×クロック) を対策として採用する。");
+    return 0;
+  }
+
   if (strcmp(argv[1], "mon") == 0) {
     const int kMaxCount = 120;
     int count = 20;  // 既定回数
@@ -353,7 +469,7 @@ static int cmd_imu(int argc, char** argv) {
     return 0;
   }
 
-  Serial.println("usage: imu [init|stat|cal|mon [n]]");
+  Serial.println("usage: imu [init|stat|cal|mon [n]|i2cdiag [n]]");
   return -1;
 }
 
