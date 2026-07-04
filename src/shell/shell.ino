@@ -11,7 +11,7 @@
  *   - 各コマンドの実体（HW依存）: 本スケッチ内のハンドラ
  *
  * コマンド:
- *   - help / led / cds / beep / motor / imu / gnss は実動作
+ *   - help / led / cds / beep / motor / imu / gnss / land は実動作
  *   - log は Phase2 で hal モジュールを結線して実装するスタブ
  *
  * シリアル: 115200 bps
@@ -23,6 +23,7 @@
 #include "bno055.h"
 #include "cli.h"
 #include "compass.h"
+#include "landing.h"
 #include "motor.h"
 #include "ntshell.h"
 #include "spresense_gnss.h"
@@ -43,6 +44,10 @@ static motor::MotorDriver g_motor(g_gpio, hal::kMotorLeft, hal::kMotorRight);
 // 9軸センサ（BNO055, I2C 0x28）。begin() の成否を g_imu_ok に保持する。
 static hal::Bno055Compass g_imu;
 
+// 着地(静止)検知器（HW非依存ロジック core/landing）。g_imu の加速度を逐次与えて静止→着地を判定。
+// 既定設定（窓20・静止1秒で確定）。しきい値は実機で調整する暫定値。
+static landing::LandingDetector g_landing;
+
 // GNSS（Spresense 内蔵）。begin() で COLD_START、update() でノンブロッキングに最新測位を読む。
 static hal::SpresenseGnss g_gnss;
 
@@ -54,6 +59,7 @@ static int cmd_beep(int argc, char** argv);
 static int cmd_motor(int argc, char** argv);
 static int cmd_imu(int argc, char** argv);
 static int cmd_gnss(int argc, char** argv);
+static int cmd_land(int argc, char** argv);
 static int cmd_todo(int argc, char** argv);  // Phase2 で実装予定のスタブ
 
 static const cli::Command kCommands[] = {
@@ -62,8 +68,9 @@ static const cli::Command kCommands[] = {
     {"cds", "cds : 照度センサ(A0)の生値を表示", cmd_cds},
     {"beep", "beep <freq_hz> <ms> : スピーカ(D09)を鳴らす", cmd_beep},
     {"motor", "motor <forward|back|left|right|stop> [duty 0-255] [ms] : モータ駆動", cmd_motor},
-    {"imu", "imu [init|stat|cal|mon [n]] : 9軸センサ(BNO055)の方位/校正/状態を読む", cmd_imu},
+    {"imu", "imu [init|stat|cal|mon [n]|i2cdiag [n]] : 9軸センサ(BNO055)の方位/校正/状態/I2C診断", cmd_imu},
     {"gnss", "gnss [init|mon [n]] : GNSS測位の状態/位置/品質を読む", cmd_gnss},
+    {"land", "land [mon [n]] : 加速度から着地(静止)を検知（要 imu init）", cmd_land},
     {"log", "log : 制御履歴ログ（Issue #14 で実装）", cmd_todo},
 };
 static const int kCommandCount = sizeof(kCommands) / sizeof(kCommands[0]);
@@ -235,18 +242,87 @@ static int imu_read_once() {
   return valid ? 0 : -1;
 }
 
-// imu [init|stat|cal|mon [n]]
-//   imu          : 方位角とキャリブレーション状態を1回読む
-//   imu init     : センサを(再)初期化する（配線・電源を入れた後に試せる）
-//   imu stat     : システム状態（融合稼働/自己診断/エラー）を表示する＝読み取り健全性の確認
-//   imu cal      : キャリブレーション状態だけ表示する
-//   imu mon [n]  : n回（既定20・上限120）方位/校正を約0.5秒間隔で表示する（校正収束の観察用）
-// 注: mon は読み取り専用で HW を駆動しないため安全（gotchas B5）。長時間ブロックを避けるため
+// imu i2cdiag のワンパス実行（対策A/Bの単位）。加速度I2C読みを count 回「単発試行」し、生失敗率・
+// 失敗フェーズ内訳・周期内リトライ(3回×5ms)回復率を1行に集計する。sendStop/clockHz を変えて
+// トランザクション方式×クロックを実機比較するために使う。診断用途なので delay ベースで待つ（各パス
+// が短時間なため中断ポーリングは省略）。呼び出し後はクロックが clockHz のままになる点に注意（呼び出し
+// 側の i2cdiag が最後に 100kHz へ戻す）。
+static void imu_i2c_pass(const char* label, int count, unsigned long intervalMs, bool sendStop,
+                         uint32_t clockHz) {
+  Wire.setClock(clockHz);
+  int rawFail = 0;
+  int recovered = 0;
+  int hardFail = 0;
+  int failWriteAddr = 0;
+  int failRequestFrom = 0;
+  int failShortRead = 0;
+  for (int i = 0; i < count; i++) {
+    landing::Accel3 a;
+    hal::Bno055Compass::AccelReadResult r = g_imu.readAccelerationDiag(a, sendStop);
+    if (!r.ok) {
+      rawFail++;
+      if (r.phase == hal::Bno055Compass::AccelReadPhase::kWriteAddr) {
+        failWriteAddr++;
+      } else if (r.phase == hal::Bno055Compass::AccelReadPhase::kRequestFrom) {
+        failRequestFrom++;
+      } else if (r.phase == hal::Bno055Compass::AccelReadPhase::kShortRead) {
+        failShortRead++;
+      }
+      // 周期内リトライ（heading 相当: 追加2回×5ms = 合計3試行）で回復するか
+      bool ok = false;
+      for (int t = 0; t < 2; t++) {
+        delay(5);
+        if (g_imu.readAccelerationDiag(a, sendStop).ok) {
+          ok = true;
+          break;
+        }
+      }
+      if (ok) {
+        recovered++;
+      } else {
+        hardFail++;
+      }
+    }
+    if (i + 1 < count) {
+      delay(intervalMs);
+    }
+  }
+  Serial.print("[");
+  Serial.print(label);
+  Serial.print("] 生失敗 ");
+  Serial.print(rawFail);
+  Serial.print("/");
+  Serial.print(count);
+  Serial.print(" (");
+  Serial.print(count > 0 ? rawFail * 100.0 / count : 0.0, 1);
+  Serial.print("%)  内訳 wAddr=");
+  Serial.print(failWriteAddr);
+  Serial.print(" reqFrom=");
+  Serial.print(failRequestFrom);
+  Serial.print(" short=");
+  Serial.print(failShortRead);
+  Serial.print("  retry回復=");
+  Serial.print(recovered);
+  Serial.print("/");
+  Serial.print(rawFail);
+  Serial.print(" hardFail=");
+  Serial.println(hardFail);
+}
+
+// imu [init|stat|cal|mon [n]|i2cdiag [n]]
+//   imu            : 方位角とキャリブレーション状態を1回読む
+//   imu init       : センサを(再)初期化する（配線・電源を入れた後に試せる）
+//   imu stat       : システム状態（融合稼働/自己診断/エラー）を表示する＝読み取り健全性の確認
+//   imu cal        : キャリブレーション状態だけ表示する
+//   imu mon [n]    : n回（既定20・上限120）方位/校正を約0.5秒間隔で表示する（校正収束の観察用）
+//   imu i2cdiag [n]: 各パス n回（既定100・上限150）の加速度I2C読みを、repeated-start/STOP × 100k/50k の
+//                    4通りで連続測定し、生失敗率が最小の対策(方式×クロック)を実機で選ぶ
+// 注: mon/i2cdiag は読み取り専用で HW を駆動しないため安全（gotchas B5）。mon は長時間ブロックを避け
 //     インターバル中に Enter 以外のキー入力があれば即中断する（millis ベースのポーリング待ち）。
 //     CRLF の残留 LF を中断と誤認しないよう CR/LF は読み飛ばす（gotchas B10）。
 static int cmd_imu(int argc, char** argv) {
   if (argc > 3) {
-    Serial.println("usage: imu [init|stat|cal|mon [n]]");
+    Serial.println("usage: imu [init|stat|cal|mon [n]|i2cdiag [n]]");
     return -1;
   }
 
@@ -299,6 +375,53 @@ static int cmd_imu(int argc, char** argv) {
     return 0;
   }
 
+  if (strcmp(argv[1], "i2cdiag") == 0) {
+    // I2C 加速度読みの信頼性を切り分ける。原因は既に BNO055 のクロックストレッチと確定（失敗が
+    //   requestFrom 相に集中・writeAddr=0・SYS_ERR=0）。ここでは対策候補を実機A/Bする:
+    //   トランザクション方式(repeated-start vs STOP) × I2Cクロック(100k vs 50k) の 2×2 を、同一条件
+    //   （同じ n・同じ間隔）で連続測定し、生失敗率が最小の組合せを観測で選ぶ。
+    // 上限は4パス通しでも中断不能な待ち時間が過大にならない範囲に抑える（本コマンドは各パス間の
+    // キー中断を持たないため。150×4パス×~17ms ≒ 10秒台）。
+    const int kMaxCount = 150;
+    int count = 100;  // 各パスの試行回数（既定100・約17ms間隔で1パス約2秒）
+    if (argc == 3) {
+      if (!cli::parseInt(argv[2], count) || count < 1 || count > kMaxCount) {
+        Serial.print("回数は 1-");
+        Serial.print(kMaxCount);
+        Serial.println(" の整数");
+        return -1;
+      }
+    }
+    hal::Bno055Compass::SystemStatus s0 = g_imu.systemStatus();
+    Serial.print("i2cdiag: 開始 SYS status=");
+    Serial.print(s0.status);
+    Serial.print(" self_test=0x");
+    Serial.print(s0.selfTest, HEX);
+    Serial.print(" sys_error=");
+    Serial.println(s0.error);
+    Serial.print("i2cdiag: 各パス n=");
+    Serial.print(count);
+    Serial.println(" interval=17ms retry=3x@5ms（Wireコアの生ERROR行が失敗毎に出るのは正常）");
+    Serial.println("---- 対策A/B: 生失敗率が最小の (方式×クロック) を選ぶ ----");
+    // 融合更新(~100Hz=10ms)と非同調な間隔で代表的な失敗率を測る（10の整数倍を避ける）。
+    const unsigned long kIv = 17;
+    imu_i2c_pass("RS  100k", count, kIv, false, 100000);
+    imu_i2c_pass("STOP100k", count, kIv, true, 100000);
+    imu_i2c_pass("RS   50k", count, kIv, false, 50000);
+    imu_i2c_pass("STOP 50k", count, kIv, true, 50000);
+    // 運用クロックへ戻す。BNO055 の運用は Adafruit begin() が設定する 50kHz（kI2cClockHz）で、
+    // ここを 100kHz 等の想定値へ“戻す”と設定持ち越しで運用クロックが変わる（gotchas A5/B17）。
+    Wire.setClock(hal::Bno055Compass::kI2cClockHz);
+    hal::Bno055Compass::SystemStatus s1 = g_imu.systemStatus();
+    Serial.print("i2cdiag: 終了 SYS status=");
+    Serial.print(s1.status);
+    Serial.print(" sys_error=");
+    Serial.println(s1.error);
+    Serial.println("-> wAddr=0 かつ SYS_ERR=0 が保たれていればクロックストレッチ確定。");
+    Serial.println("   生失敗率が最小のパスの (方式×クロック) を対策として採用する。");
+    return 0;
+  }
+
   if (strcmp(argv[1], "mon") == 0) {
     const int kMaxCount = 120;
     int count = 20;  // 既定回数
@@ -346,7 +469,7 @@ static int cmd_imu(int argc, char** argv) {
     return 0;
   }
 
-  Serial.println("usage: imu [init|stat|cal|mon [n]]");
+  Serial.println("usage: imu [init|stat|cal|mon [n]|i2cdiag [n]]");
   return -1;
 }
 
@@ -466,6 +589,116 @@ static int cmd_gnss(int argc, char** argv) {
   }
 
   Serial.println("usage: gnss [init|mon [n]]");
+  return -1;
+}
+
+// 加速度を1回読み、大きさ|a|・窓の平均/分散・静止継続時間・着地状態を1行表示し、
+// 検知器 g_landing へ1サンプル与える。読み取り失敗時は false（検知器へは与えない）。
+// 状態表示は core/landing の判定（isStillNow/hasLanded、ホストテスト済）に基づく。
+static bool land_feed_and_print(double dtMs) {
+  landing::Accel3 a;
+  if (!g_imu.readAcceleration(a)) {
+    Serial.println("land: 加速度読み取り失敗（I2C。配線/初期化を確認）");
+    return false;
+  }
+  g_landing.update(a, dtMs);
+  Serial.print("|a|=");
+  Serial.print(a.magnitude(), 2);
+  Serial.print(" mean=");
+  Serial.print(g_landing.meanMagnitude(), 2);
+  Serial.print(" var=");
+  Serial.print(g_landing.variance(), 3);
+  Serial.print(" still=");
+  Serial.print(g_landing.stillElapsedMs(), 0);
+  Serial.print("ms");
+  if (g_landing.hasLanded()) {
+    Serial.println("  -> 着地検知（静止確定）");
+  } else if (g_landing.isStillNow()) {
+    Serial.println("  -> 静止中（着地確定待ち）");
+  } else if (g_landing.windowFull()) {
+    Serial.println("  -> 運動中");
+  } else {
+    Serial.println("  -> 計測中（窓充填中）");
+  }
+  return true;
+}
+
+// land [mon [n]]
+//   land         : 加速度を1回読み、大きさ|a|と状態を表示（検知器をリセットして単発観測）
+//   land mon [n] : n回（既定100・上限600）加速度を約50ms周期で読み、静止→着地確定を観測する
+// 前提: 加速度は g_imu（BNO055）から読むため 'imu init' が必要。
+// 注: 読み取り専用で HW を駆動しないため安全（gotchas B5）。mon 中も非改行キーで即中断する。
+static int cmd_land(int argc, char** argv) {
+  if (argc > 3) {
+    Serial.println("usage: land [mon [n]]");
+    return -1;
+  }
+  if (!g_imu.ready()) {
+    Serial.println("land: 9軸センサ未初期化。'imu init' で初期化してください");
+    return -1;
+  }
+
+  if (argc == 1) {
+    // 単発は生 |a| 確認用。reset 直後・窓充填前なので状態は必ず「計測中」になる。
+    // 静止/着地の判定は継続サンプルが要るため 'land mon' を使う。
+    g_landing.reset();
+    bool ok = land_feed_and_print(0.0);
+    Serial.println("land: 静止/着地の判定は 'land mon' を使う（単発は |a| 確認用）");
+    return ok ? 0 : -1;
+  }
+
+  if (strcmp(argv[1], "mon") == 0) {
+    const int kMaxCount = 600;
+    int count = 100;  // 既定回数（約50ms周期で 5 秒。窓20充填後に静止1秒で着地確定）
+    if (argc == 3) {
+      if (!cli::parseInt(argv[2], count) || count < 1 || count > kMaxCount) {
+        Serial.print("回数は 1-");
+        Serial.print(kMaxCount);
+        Serial.println(" の整数");
+        return -1;
+      }
+    }
+    g_landing.reset();
+    unsigned long prev = 0;  // 前サンプルの時刻
+    bool havePrev = false;   // prev が有効か（millis()==0 の値と初回未設定を混同しない）
+    for (int i = 0; i < count; i++) {
+      Serial.print("[");
+      Serial.print(i + 1);
+      Serial.print("/");
+      Serial.print(count);
+      Serial.print("] ");
+      // 前サンプルからの実経過[ms]を dt として与える（初回は 0＝継続時間の起点）。
+      unsigned long now = millis();
+      double dtMs = havePrev ? static_cast<double>(now - prev) : 0.0;
+      prev = now;
+      havePrev = true;
+      land_feed_and_print(dtMs);
+      // 約50ms インターバル。非改行キーで残りを打ち切る（gotchas B10: CR/LF は読み飛ばす）。
+      if (i + 1 < count) {
+        unsigned long start = millis();
+        bool aborted = false;
+        while (millis() - start < 50) {
+          if (Serial.available()) {
+            int c = Serial.read();
+            if (c >= 0 && c != '\r' && c != '\n') {
+              while (Serial.available()) {
+                Serial.read();
+              }
+              aborted = true;
+              break;
+            }
+          }
+        }
+        if (aborted) {
+          Serial.println("land mon: 中断しました");
+          break;
+        }
+      }
+    }
+    return 0;
+  }
+
+  Serial.println("usage: land [mon [n]]");
   return -1;
 }
 

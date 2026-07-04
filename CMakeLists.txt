@@ -35,6 +35,7 @@ add_library(core
   src/lib/core/motor.cpp
   src/lib/core/compass.cpp
   src/lib/core/gnss_fix.cpp
+  src/lib/core/landing.cpp
 )
 target_include_directories(core PUBLIC src/lib/core)
 
