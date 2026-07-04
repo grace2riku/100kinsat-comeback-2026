@@ -29,11 +29,14 @@ class Bno055Compass {
   // addr: I2C アドレス（秋月電子の出荷時 0x28、ジャンパ変更で 0x29）。software.md §5.6。
   explicit Bno055Compass(uint8_t addr = 0x28) : bno_(-1, addr, &Wire), addr_(addr) {}
 
-  // BNO055 の運用 I2C クロック[Hz]。Adafruit_BNO055::begin() が内部で setSpeed(50000) を呼び 50kHz
-  // を 設定する（Adafruit_BNO055.cpp / Adafruit_I2CDevice.cpp）。診断等で一時的に Wire.setClock
-  // を変えたら
-  // **必ずこの値へ戻す**こと（100kHz 等へ“戻す”と設定が持ち越されて運用クロックが変わる＝gotchas
-  // A5）。 復帰値をハードコードせず本定数を単一の出典にする（C2）。
+  // BNO055 の運用 I2C クロック[Hz]。Adafruit_BNO055::begin() の setSpeed(50000) は
+  // `#if defined(TARGET_RP2040)` ガード付きで **RP2040 限定**（Adafruit_BNO055.cpp）。Spresense
+  // では 呼ばれず、Wire 既定 100kHz（Wire.cpp `TWI_FREQ_100KHZ`）のままになる。そこで begin()
+  // でこの値を
+  // **明示設定**して運用クロックを決定的にする（さもないと imu i2cdiag 実行後だけ 50kHz になり、
+  // コマンド履歴で運用クロックが変わる）。診断等で一時的に Wire.setClock を変えたら **必ずこの値へ
+  // 戻す**こと（gotchas A5/B17）。復帰値をハードコードせず本定数を単一の出典にする（C2）。
+  // 50kHz を選ぶ理由: imu i2cdiag の実機A/Bで 50kHz が 100kHz と同等〜わずかに低失敗率だったため。
   static constexpr uint32_t kI2cClockHz = 50000;
 
   // 検出・初期化し外部クロックを有効化する。false=未検出（I2C 配線/アドレス/電源を疑う）。
@@ -53,6 +56,11 @@ class Bno055Compass {
     // 検出/リセット待ちとは別で、成功パスでは重複しない。実機で短縮余地を確認してよい）。
     delay(1000);
     bno_.setExtCrystalUse(true);  // 秋月版は外部クロック付き（方位精度の向上）
+    // 運用 I2C クロックを明示設定する。Adafruit begin() の setSpeed(50000) は RP2040 限定で
+    // Spresense では効かず、放置すると Wire 既定 100kHz
+    // のまま＝運用点がコマンド履歴依存になる（kI2cClockHz の コメント参照）。検出・初期化の I2C
+    // 通信が済んだこの時点で運用クロックへ落とす。
+    Wire.setClock(kI2cClockHz);
     begun_ = true;
     return true;
   }
