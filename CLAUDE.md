@@ -27,7 +27,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 GitHub マイルストーンは **Phase1 環境構築 → Phase2 単体機能の設計・実装・確認 → Phase3 自律制御の結合（確実にゴール）→ Phase4 シミュレーター環境 → Phase5 性能改善（優勝記録超え）** の順で進める。
 * **現在は Phase2（単体機能）。Phase3 以降の結合系 Issue（例: #17 ミッションステートマシン, #18 自律走行 など milestone "Phase3"）には、Phase2（milestone "Phase2"）の未完了 Issue を先に片付けてから着手する。**
 * 次の実装対象を提案・着手するときは、**まず Phase2 の open Issue を優先**すること。Phase を先取りしない（結合や性能改善に飛ばない）。
-* Phase3 以降の作業で得た知見は、該当 Issue にコメントで**申し送り**として残し、着手はマイルストーン順に行う。
+* Phase3 以降で検討すべき申し送りは、**その作業が起きる Open Issue の本文 DoD（チェックボックス）に追記**する（Close済みIssueやコメント／docだけに頼らない＝発火トリガーが無く追跡が消えるため）。着手はマイルストーン順に行う。詳細と理由は `doc/development/development_workflow.md` §1「申し送りは Open Issue の DoD に書く」を正本とする。
 * 現在の各 Phase の進捗は `gh api repos/{owner}/{repo}/milestones` で確認できる。
 
 ## テスト戦略
