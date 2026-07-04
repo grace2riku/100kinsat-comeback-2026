@@ -23,6 +23,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 * ソフトウェアの開発環境、各機能のサンプルコードは doc/cansat_specification/software.md を参照のこと
 * 最初から優勝チームの記録を上回ることを目標にしないこと。機能実装のフェーズ、機能実装完了後に性能向上のフェーズに入り、優勝チームの記録を上回ることを目標にソフトウェアの改善を行う。
 
+### ⚠️ マイルストーン（Phase）の順序を飛ばさない（重要・厳守）
+GitHub マイルストーンは **Phase1 環境構築 → Phase2 単体機能の設計・実装・確認 → Phase3 自律制御の結合（確実にゴール）→ Phase4 シミュレーター環境 → Phase5 性能改善（優勝記録超え）** の順で進める。
+* **現在は Phase2（単体機能）。Phase3 以降の結合系 Issue（例: #17 ミッションステートマシン, #18 自律走行 など milestone "Phase3"）には、Phase2（milestone "Phase2"）の未完了 Issue を先に片付けてから着手する。**
+* 次の実装対象を提案・着手するときは、**まず Phase2 の open Issue を優先**すること。Phase を先取りしない（結合や性能改善に飛ばない）。
+* Phase3 以降の作業で得た知見は、該当 Issue にコメントで**申し送り**として残し、着手はマイルストーン順に行う。
+* 現在の各 Phase の進捗は `gh api repos/{owner}/{repo}/milestones` で確認できる。
+
 ## テスト戦略
 * テスト駆動開発で開発をおこなう。
 * ハードウェアに依存しない機能のテストはホストPCでテストが完結するようにテスト環境を構築する。
