@@ -184,10 +184,20 @@
 | 9 軸センサ SCL | D15 | BNO055 `SCL` |
 | TWELITE TX | D00 | TWELITE `RX` 側 |
 | TWELITE RX | D01 | TWELITE `TX` 側 |
-| 電熱線駆動 | D06 | FET ゲート |
+| 電熱線駆動 | D06 | `HEAT_3v3` → Q1(2N7000) ゲート（下記「電熱線回路」参照） |
 | SD カード | SDIO (CLK / CMD / DAT0-3 / CD) | microSD ソケット (Spresense メインボード搭載) |
 
 > モータドライバ `STBY` は 10kΩ プルアップで常時 HIGH。`AO1/AO2` → モータ A、`BO1/BO2` → モータ B に接続。SpresenseGPIO 最大電流 ~6mA のため、モータ駆動 (数百 mA) は TB6612FNG 経由必須。
+
+### 電熱線 (パラシュート切り離し) 回路 — `D06` / SW2 / J9
+
+回路図: `doc/cansat_specification/cansat_heat.png`。**危険側アクチュエータ (発火・やけど注意)**。ソフトは `src/lib/core/separator` ＋ shell `separate`、実機手順は `doc/development/separator_bringup.md`。
+
+- 構成: `D06`(3.3V ロジック, ネット `HEAT_3v3`) → **Q1 2N7000 (Nch, レベルシフタ)** → **Q2 AO3401A (Pch, ハイサイドスイッチ)** → **J9 のニクロム線** → GND。`D06`=HIGH で Q1 ON→Q2 ゲート LOW→Q2 ON→ニクロム通電。
+- **SW2 (`SW_DIP_x01`) = ハイサイド電源の直列アーミングスイッチ**（`+6V` と Q2 ソースの間）。**オープン (ショートピン無し) では Q2 に +6V が供給されず、D06 を HIGH にしても加熱できない**。加熱にはショートピンを挿して SW2 を閉じる（アーム）必要がある。安全インターロック。
+- **R25 10kΩ = Q1 ゲート (`HEAT_3v3`) のプルダウン**。D06 がハイインピーダンス（ブート窓）でも Q1 ゲートが GND に固定され非加熱（gotchas B18 の懸念を HW で解消）。
+- **R28 1kΩ = Q2 ゲートの +6V プルアップ**（D06 LOW 時に Q2 を確実に OFF）。**D4(LED)+R26 = `HEAT_3v3` の状態表示**（D06 HIGH で点灯。ゲート信号の表示なので SW2 オープンでも点灯する）。C17/C18 は DNP（未実装）。
+- **安全3層**: ① SW2 直列アーミング（電源側）② R25 ゲートプルダウン（B18）③ ソフト（`setup()` 先頭 LOW＋加熱時間の上限ガード＋RAII）。**打ち上げ前チェックリストに「SW2 アーム」を必須項目として入れる**（運搬・整備中はオープン＝非加熱で保管）。
 
 ### TB6612FNG 入力 → 出力対応
 
