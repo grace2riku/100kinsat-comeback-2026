@@ -752,22 +752,35 @@ static int cmd_separate(int argc, char** argv) {
     return -1;
   }
 
+  // 過加熱の上振れ防止: 更新/中断ポーリングは細かい粒度で行い、かつ「残り加熱時間」で頭打ちにする。
+  // 固定 100ms 待ちだと heatMs<100ms（例 separate 1）や端数で最大約1周期ぶん HIGH を延長してしまう
+  // （Codex 指摘）。待ち時間を remaining にクランプし、上限到達で即 LOW に倒す。進捗表示は間引く。
+  const unsigned long kPollMs = 10;  // 中断応答＆上振れ上限の粒度
   unsigned long prev = millis();
+  unsigned long lastPrintMs = prev;
   bool aborted = false;
-  // 100ms 周期で経過を与えつつ加熱。core が heatMs 到達で自動 LOW にするまで回す。
   while (sep.isHeating()) {
     unsigned long now = millis();
     sep.update(static_cast<double>(now - prev));
     prev = now;
-    Serial.print("  D06=HIGH 加熱中 elapsed=");
-    Serial.print(sep.heatElapsedMs(), 0);
-    Serial.println(" ms");
     if (!sep.isHeating()) {
       break;  // このサンプルで上限到達→停止済み
     }
-    // 約100ms 待つ間、非改行キーで中断（gotchas B10: CR/LF は読み飛ばす）。
+    if (now - lastPrintMs >= 250) {  // 表示は約250ms毎（10ms粒度での洪水を避ける）
+      Serial.print("  D06=HIGH 加熱中 elapsed=");
+      Serial.print(sep.heatElapsedMs(), 0);
+      Serial.println(" ms");
+      lastPrintMs = now;
+    }
+    // 次の update までの待ち = min(kPollMs, 残り加熱時間)。1ms 未満は 1ms（ビジーループ回避）。
+    double remaining = sep.config().heatMs - sep.heatElapsedMs();
+    unsigned long waitMs = kPollMs;
+    if (remaining < static_cast<double>(kPollMs)) {
+      waitMs = (remaining > 1.0) ? static_cast<unsigned long>(remaining) : 1;
+    }
+    // 待機中に非改行キーで中断（gotchas B10: CR/LF は読み飛ばす / B5: delay 一括せずポーリング）。
     unsigned long start = millis();
-    while (millis() - start < 100) {
+    while (millis() - start < waitMs) {
       if (Serial.available()) {
         int c = Serial.read();
         if (c >= 0 && c != '\r' && c != '\n') {

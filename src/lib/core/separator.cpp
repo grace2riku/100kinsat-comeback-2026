@@ -1,5 +1,7 @@
 #include "separator.h"
 
+#include <cmath>
+
 namespace separator {
 
 namespace {
@@ -76,7 +78,12 @@ void ParachuteSeparator::update(double dtMs) {
   if (state_ != State::Heating) {
     return;  // Idle/Done は何もしない（誤加熱しない）
   }
-  if (dtMs > 0.0) {
+  // 非有限(NaN/±Inf)な時刻差はソフト上限ガードを無効化する（NaN は比較が全て false になり Heating
+  // のまま凍結＝D06 が HIGH に残る）。時刻源異常とみなし「上限到達」扱いで安全側に加熱を完了させる
+  // （LOW＋通常完了と同じ状態遷移。再試行ポリシーは温存）。
+  if (!std::isfinite(dtMs)) {
+    heatElapsedMs_ = cfg_.heatMs;
+  } else if (dtMs > 0.0) {
     heatElapsedMs_ += dtMs;
   }
   if (heatElapsedMs_ >= cfg_.heatMs) {
