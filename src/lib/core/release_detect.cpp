@@ -116,8 +116,11 @@ void ReleaseDetector::update(int raw, double dtMs) {
     wasOn_ = false;
   }
 
-  // 5) アーム済みかつ継続時間が閾値に達したら放出確定（ラッチ）。一度立ったら reset() まで保持。
-  if (armed_ && elapsedMs_ >= cfg_.requiredMs) {
+  // 5) 「現在も放出側条件を満たし(conditionOn_)」かつアーム済みかつ継続時間が閾値に達したら放出確定
+  //    （ラッチ）。conditionOn_ を課さないと、requiredMs=0（負値/NaN の sanitize 結果を含む）のとき
+  //    暗(OFF)サンプルで armed かつ elapsedMs_=0>=0
+  //    が成立し、放出前(装置内)なのに誤ラッチする（Codex P2）。 一度立ったら reset() まで保持。
+  if (conditionOn_ && armed_ && elapsedMs_ >= cfg_.requiredMs) {
     released_ = true;
   }
 }

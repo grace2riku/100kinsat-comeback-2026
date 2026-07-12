@@ -265,13 +265,23 @@ TEST_CASE("dtMs<=0 は時間経過なしとして継続時間を進めない") {
   CHECK_FALSE(d.hasReleased());
 }
 
-TEST_CASE("requiredMs=0 でも、暗(OFF)観測後に ON になった最初のサンプルで即確定する") {
+TEST_CASE("requiredMs=0 でも、暗(OFF)観測だけでは確定せず、ON になった最初のサンプルで確定する") {
   ReleaseConfig c = brighterCfg();
   c.requiredMs = 0.0;
   ReleaseDetector d(c);
-  d.update(800, 0.0);  // 暗を観測（arm）
-  d.update(100, 0.0);  // ON、継続0 >= 0 で即確定
+  d.update(800, 0.0);            // 暗を観測（arm）。放出前(OFF)なので requiredMs=0 でも確定しない
+  CHECK_FALSE(d.hasReleased());  // conditionOn_ ガードが無いと暗のまま誤ラッチする（Codex P2 回帰）
+  d.update(100, 0.0);            // ON、継続0 >= 0 で即確定
   CHECK(d.hasReleased());
+}
+
+TEST_CASE("requiredMs が負値/NaN(→sanitize で 0)でも、暗のまま放出確定しない") {
+  ReleaseConfig c = brighterCfg();
+  c.requiredMs = std::nan("");  // sanitize で 0 にクランプされる
+  ReleaseDetector d(c);
+  feed(d, 800, 5, 50.0);  // ずっと暗（放出前）。armed になるが conditionOn_ が false
+  CHECK(d.isArmed());
+  CHECK_FALSE(d.hasReleased());  // requiredMs=0 でも暗では確定しない
 }
 
 // ---- アーミング（暗→明の遷移を要求する安全機構。電源投入時点灯・断線 stuck-at-bright 対策） ----
