@@ -37,6 +37,7 @@ add_library(core
   src/lib/core/gnss_fix.cpp
   src/lib/core/landing.cpp
   src/lib/core/separator.cpp
+  src/lib/core/datalog.cpp
 )
 target_include_directories(core PUBLIC src/lib/core)
 

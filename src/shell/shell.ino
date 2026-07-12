@@ -11,8 +11,7 @@
  *   - 各コマンドの実体（HW依存）: 本スケッチ内のハンドラ
  *
  * コマンド:
- *   - help / led / cds / beep / motor / imu / gnss / land / separate は実動作
- *   - log は Phase2 で hal モジュールを結線して実装するスタブ
+ *   - help / led / cds / beep / motor / imu / gnss / land / separate / log は実動作
  *
  * シリアル: 115200 bps
  */
@@ -23,9 +22,11 @@
 #include "bno055.h"
 #include "cli.h"
 #include "compass.h"
+#include "datalog.h"
 #include "landing.h"
 #include "motor.h"
 #include "ntshell.h"
+#include "sd_log_sink.h"
 #include "separator.h"
 #include "spresense_gnss.h"
 #include "spresense_pins.h"
@@ -62,7 +63,7 @@ static int cmd_imu(int argc, char** argv);
 static int cmd_gnss(int argc, char** argv);
 static int cmd_land(int argc, char** argv);
 static int cmd_separate(int argc, char** argv);
-static int cmd_todo(int argc, char** argv);  // Phase2 で実装予定のスタブ
+static int cmd_log(int argc, char** argv);
 
 static const cli::Command kCommands[] = {
     {"help", "コマンド一覧を表示", cmd_help},
@@ -75,7 +76,7 @@ static const cli::Command kCommands[] = {
     {"land", "land [mon [n]] : 加速度から着地(静止)を検知（要 imu init）", cmd_land},
     {"separate", "separate [ms|stop] : パラシュート切り離し電熱線(D06)を加熱（安全上限あり・⚠高温注意）",
      cmd_separate},
-    {"log", "log : 制御履歴ログ（Issue #14 で実装）", cmd_todo},
+    {"log", "log [n] : 制御履歴(制御量+操作量)をSDへCSV記録(既定5件・ダミー)", cmd_log},
 };
 static const int kCommandCount = sizeof(kCommands) / sizeof(kCommands[0]);
 
@@ -803,9 +804,62 @@ static int cmd_separate(int argc, char** argv) {
   return 0;
 }
 
-static int cmd_todo(int /*argc*/, char** argv) {
-  Serial.print(argv[0]);
-  Serial.println(" : 未実装。Phase2 の該当 Issue で hal モジュールを結線して実装します。");
+// log [n]
+//   制御履歴（制御量＋操作量）を SD へ CSV 記録する。実センサの結合は #17/#18 で行うため、
+//   本コマンドは単体確認用に**ダミーの LogRecord** を n 件（既定5・範囲1..1000）書く。
+//   FIX あり/なし・正負モータを混ぜ、欠損表現（空フィールド）とフォーマットを実機で確認できる。
+// 設計（Issue #14 / DoD）:
+//   - CSV 整形・欠損サニタイズ・周期 flush は core datalog（ホストテスト済）。
+//   - SD(FAT32) 追記・連番ファイル名・同時1ファイル制約は hal::SdLogSink。
+static int cmd_log(int argc, char** argv) {
+  int count = 5;
+  if (argc == 2) {
+    if (!cli::parseInt(argv[1], count) || count < 1 || count > 1000) {
+      Serial.println("usage: log [n]  (n=1..1000)");
+      return -1;
+    }
+  } else if (argc > 2) {
+    Serial.println("usage: log [n]");
+    return -1;
+  }
+
+  hal::SdLogSink sink;
+  datalog::FlightLogger logger(sink);
+  if (!logger.begin()) {
+    Serial.println("log: SD を開けません（カード有無・FAT32 フォーマットを確認）");
+    return -1;
+  }
+  Serial.print("log: 記録先 ");
+  Serial.println(sink.path());
+
+  for (int i = 0; i < count; i++) {
+    datalog::LogRecord r;
+    r.timestampMs = millis();
+    r.state = static_cast<uint8_t>(i % 5);  // ダミー状態コード
+    // 偶数=FIXあり（位置系を出力）/ 奇数=FIXなし（位置系は空フィールドになる）。
+    if ((i % 2) == 0) {
+      r.hasFix = true;
+      r.latitudeDeg = 35.6812345 + i * 1e-5;
+      r.longitudeDeg = 139.7671234 + i * 1e-5;
+      r.velocityMps = 1.25f;
+      r.courseDeg = 90.5f;
+      r.distanceM = 12.75f;
+      r.bearingDeg = 95.5f;
+    }
+    r.headingDeg = static_cast<float>((i * 10) % 360);  // IMU 姿勢は常時出す
+    r.motorLeft = static_cast<int16_t>((i % 2) ? -150 : 200);  // 正負を混在
+    r.motorRight = 200;
+    if (!logger.log(r)) {
+      Serial.print("log: 書き込み失敗（");
+      Serial.print(i);
+      Serial.println(" 件目・SD 満杯/抜けの可能性）");
+      return -1;
+    }
+  }
+  logger.flush();
+  Serial.print("log: ");
+  Serial.print(logger.recordsWritten());
+  Serial.println(" 件を記録しました（SD を取り出し CSV を確認）");
   return 0;
 }
 
