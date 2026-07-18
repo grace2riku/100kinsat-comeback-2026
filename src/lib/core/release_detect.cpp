@@ -5,14 +5,16 @@
 namespace release_detect {
 
 ReleaseConfig defaultReleaseConfig() {
-  // 暫定値（実機 bring-up で調整。gotchas A）。
-  //   threshold: 装置内(暗)と上空(明)の中点想定。実機で両者の生値を測り中点へ寄せる。
-  //   hysteresis: 閾値付近の微振動でON/OFFがばたつくのを吸収する幅（暫定 50）。
-  //   polarity: 既定は Brighter（放出後は明るい＝生値が小さい）。分圧の向きは実機で確定する。
-  //   requiredMs: 放出側の明るさが 0.5s 連続で確定。閃光/ノイズの単発を弾く（実機で調整）。
+  // 実機校正値（2026-07-18 夜間・室内の代替測定＝bring-up 手順A'。屋外昼間での再校正は #22）。
+  //   実測: 装置内(遮光箱・暗) D=1022、室内照明(明) B=894..897（representative 896）。
+  //   polarity: 明の方が生値が小さい（B < D）ため Brighter で確定（分圧の向き）。
+  //   threshold: 中点 (1022+896)/2 ≈ 959 → 960。屋外昼光は室内よりさらに明側（小さい値）に
+  //     振れるため、室内基準の閾値は屋外では安全側に働く。
+  //   hysteresis: |D-B|≈126 の約8% → 10（観測ノイズは ±2 程度。OFF 復帰=970 で暗 1022 と分離）。
+  //   requiredMs: 放出側の明るさが 0.5s 連続で確定。閃光/ノイズの単発を弾く（手順C/D で検証）。
   ReleaseConfig c;
-  c.threshold = 512;
-  c.hysteresis = 50;
+  c.threshold = 960;
+  c.hysteresis = 10;
   c.polarity = Polarity::Brighter;
   c.requiredMs = 500.0;
   return c;
