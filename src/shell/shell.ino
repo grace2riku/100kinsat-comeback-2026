@@ -26,6 +26,7 @@
 #include "landing.h"
 #include "motor.h"
 #include "ntshell.h"
+#include "release_detect.h"
 #include "sd_log_sink.h"
 #include "separator.h"
 #include "spresense_gnss.h"
@@ -50,6 +51,11 @@ static hal::Bno055Compass g_imu;
 // 既定設定（窓20・静止1秒で確定）。しきい値は実機で調整する暫定値。
 static landing::LandingDetector g_landing;
 
+// 放出(上空放出)検知器（HW非依存ロジック core/release_detect）。A0 の照度生値を逐次与え、
+// 「装置内(暗)→上空(明)」の継続で放出を確定する。既定設定（閾値512・ヒステリシス50・0.5s継続）。
+// しきい値・極性は実機で調整する暫定値（release_detect_bringup.md のキャリブレーション手順）。
+static release_detect::ReleaseDetector g_release;
+
 // GNSS（Spresense 内蔵）。begin() で COLD_START、update() でノンブロッキングに最新測位を読む。
 static hal::SpresenseGnss g_gnss;
 
@@ -68,7 +74,7 @@ static int cmd_log(int argc, char** argv);
 static const cli::Command kCommands[] = {
     {"help", "コマンド一覧を表示", cmd_help},
     {"led", "led <0-3> <on|off> : 内蔵LEDを点灯/消灯", cmd_led},
-    {"cds", "cds : 照度センサ(A0)の生値を表示", cmd_cds},
+    {"cds", "cds [mon [n]] : 照度センサ(A0)の生値/放出検知（暗→明の継続）を表示", cmd_cds},
     {"beep", "beep <freq_hz> <ms> : スピーカ(D09)を鳴らす", cmd_beep},
     {"motor", "motor <forward|back|left|right|stop> [duty 0-255] [ms] : モータ駆動", cmd_motor},
     {"imu", "imu [init|stat|cal|mon [n]|i2cdiag [n]] : 9軸センサ(BNO055)の方位/校正/状態/I2C診断", cmd_imu},
@@ -114,11 +120,103 @@ static int cmd_led(int argc, char** argv) {
   return 0;
 }
 
-static int cmd_cds(int /*argc*/, char** /*argv*/) {
+// 照度(A0)を1回読み、生値・放出継続時間・放出状態を1行表示し、検知器 g_release へ1サンプル
+// 与える。状態表示は core/release_detect の判定（isReleasedNow/hasReleased、ホストテスト済）に基づく。
+static void cds_feed_and_print(double dtMs) {
   int v = analogRead(A0);
-  Serial.print("cds(A0) = ");
-  Serial.println(v);
-  return 0;
+  g_release.update(v, dtMs);
+  Serial.print("cds(A0)=");
+  Serial.print(g_release.lastRaw());
+  Serial.print(" elapsed=");
+  Serial.print(g_release.releasedElapsedMs(), 0);
+  Serial.print("ms");
+  if (g_release.hasReleased()) {
+    Serial.println("  -> 放出検知（確定）");
+  } else if (g_release.isReleasedNow()) {
+    // 明側だが、暗(OFF)を一度も観測していない（未アーム）と確定しない。暗所起動の運用ミスに気づける。
+    if (g_release.isArmed()) {
+      Serial.println("  -> 放出側（確定待ち）");
+    } else {
+      Serial.println("  -> 放出側だが未アーム（電源ONは暗所で。先に暗を観測して起点を取る）");
+    }
+  } else {
+    Serial.println("  -> 放出前（暗）");
+  }
+}
+
+// cds [mon [n]]
+//   cds          : 照度センサ(A0)の生値を1回表示（閾値キャリブレーションの生値確認用）
+//   cds mon [n]  : n回（既定100・上限600）約50ms周期で読み、暗→明の継続→放出確定を観測する
+// 注: 読み取り専用で HW を駆動しないため安全（gotchas B5）。mon 中も非改行キーで即中断する。
+// しきい値/極性は defaultReleaseConfig の暫定値。実機は release_detect_bringup.md で調整する。
+static int cmd_cds(int argc, char** argv) {
+  if (argc > 3) {
+    Serial.println("usage: cds [mon [n]]");
+    return -1;
+  }
+
+  if (argc == 1) {
+    // 単発は生値確認用（放出検知の継続判定は継続サンプルが要るため 'cds mon' を使う）。
+    int v = analogRead(A0);
+    Serial.print("cds(A0) = ");
+    Serial.println(v);
+    Serial.println("cds: 放出検知の継続判定は 'cds mon' を使う（単発は生値確認用）");
+    return 0;
+  }
+
+  if (strcmp(argv[1], "mon") == 0) {
+    const int kMaxCount = 600;
+    int count = 100;  // 既定回数（約50ms周期で 5 秒）
+    if (argc == 3) {
+      if (!cli::parseInt(argv[2], count) || count < 1 || count > kMaxCount) {
+        Serial.print("回数は 1-");
+        Serial.print(kMaxCount);
+        Serial.println(" の整数");
+        return -1;
+      }
+    }
+    g_release.reset();
+    unsigned long prev = 0;  // 前サンプルの時刻
+    bool havePrev = false;   // prev が有効か（millis()==0 の値と初回未設定を混同しない）
+    for (int i = 0; i < count; i++) {
+      Serial.print("[");
+      Serial.print(i + 1);
+      Serial.print("/");
+      Serial.print(count);
+      Serial.print("] ");
+      // 前サンプルからの実経過[ms]を dt として与える（初回は 0＝継続時間の起点）。
+      unsigned long now = millis();
+      double dtMs = havePrev ? static_cast<double>(now - prev) : 0.0;
+      prev = now;
+      havePrev = true;
+      cds_feed_and_print(dtMs);
+      // 約50ms インターバル。非改行キーで残りを打ち切る（gotchas B10: CR/LF は読み飛ばす）。
+      if (i + 1 < count) {
+        unsigned long start = millis();
+        bool aborted = false;
+        while (millis() - start < 50) {
+          if (Serial.available()) {
+            int c = Serial.read();
+            if (c >= 0 && c != '\r' && c != '\n') {
+              while (Serial.available()) {
+                Serial.read();
+              }
+              aborted = true;
+              break;
+            }
+          }
+        }
+        if (aborted) {
+          Serial.println("cds mon: 中断しました");
+          break;
+        }
+      }
+    }
+    return 0;
+  }
+
+  Serial.println("usage: cds [mon [n]]");
+  return -1;
 }
 
 static int cmd_beep(int argc, char** argv) {
