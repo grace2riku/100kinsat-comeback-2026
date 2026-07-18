@@ -25,6 +25,10 @@ constexpr motor::Pins kMotorRight{8, 4, 5};
 // HIGH で加熱、LOW で停止。安全のため起動直後は必ず LOW（separator::ParachuteSeparator::begin）。
 constexpr uint8_t kHeatingWirePin = 6;
 
+// スピーカ（UGCM0603APE）駆動ピン: D09 (PWM)。tone()/noTone() で矩形波を出す
+// （hardware.md「スピーカ D09」/ software.md §5.3。状態通知 core/notifier の出力先）。
+constexpr uint8_t kSpeakerPin = 9;
+
 }  // namespace hal
 
 #endif  // HAL_SPRESENSE_PINS_H

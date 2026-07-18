@@ -39,6 +39,7 @@ add_library(core
   src/lib/core/separator.cpp
   src/lib/core/datalog.cpp
   src/lib/core/release_detect.cpp
+  src/lib/core/notifier.cpp
 )
 target_include_directories(core PUBLIC src/lib/core)
 

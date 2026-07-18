@@ -11,7 +11,7 @@
  *   - 各コマンドの実体（HW依存）: 本スケッチ内のハンドラ
  *
  * コマンド:
- *   - help / led / cds / beep / motor / imu / gnss / land / separate / log は実動作
+ *   - help / led / cds / beep / notify / motor / imu / gnss / land / separate / log は実動作
  *
  * シリアル: 115200 bps
  */
@@ -25,6 +25,7 @@
 #include "datalog.h"
 #include "landing.h"
 #include "motor.h"
+#include "notifier.h"
 #include "ntshell.h"
 #include "release_detect.h"
 #include "sd_log_sink.h"
@@ -64,6 +65,7 @@ static int cmd_help(int argc, char** argv);
 static int cmd_led(int argc, char** argv);
 static int cmd_cds(int argc, char** argv);
 static int cmd_beep(int argc, char** argv);
+static int cmd_notify(int argc, char** argv);
 static int cmd_motor(int argc, char** argv);
 static int cmd_imu(int argc, char** argv);
 static int cmd_gnss(int argc, char** argv);
@@ -76,6 +78,8 @@ static const cli::Command kCommands[] = {
     {"led", "led <0-3> <on|off> : 内蔵LEDを点灯/消灯", cmd_led},
     {"cds", "cds [mon [n]] : 照度センサ(A0)の生値/放出検知（暗→明の継続）を表示", cmd_cds},
     {"beep", "beep <freq_hz> <ms> : スピーカ(D09)を鳴らす", cmd_beep},
+    {"notify", "notify <boot|goal|error> [sec] | stop : 状態通知パターン再生(スピーカD09+LED)",
+     cmd_notify},
     {"motor", "motor <forward|back|left|right|stop> [duty 0-255] [ms] : モータ駆動", cmd_motor},
     {"imu", "imu [init|stat|cal|mon [n]|i2cdiag [n]] : 9軸センサ(BNO055)の方位/校正/状態/I2C診断", cmd_imu},
     {"gnss", "gnss [init|mon [n]] : GNSS測位の状態/位置/品質を読む", cmd_gnss},
@@ -230,10 +234,149 @@ static int cmd_beep(int argc, char** argv) {
     Serial.println("freq/ms は正の整数");
     return -1;
   }
-  tone(9, freq);  // D09: スピーカ
+  tone(hal::kSpeakerPin, freq);  // D09: スピーカ
   delay(ms);
-  noTone(9);
+  noTone(hal::kSpeakerPin);
   Serial.println("beep done");
+  return 0;
+}
+
+// notifier の現在出力を実 HW へ適用する（変化時のみ）。tone() は同一周波数でも呼び直すと
+// 位相が乱れるため、前回適用値と異なるときだけ tone/noTone・digitalWrite を行う。
+static void notify_apply(uint16_t hz, uint8_t mask, uint16_t& lastHz, uint8_t& lastMask) {
+  if (hz != lastHz) {
+    if (hz == 0) {
+      noTone(hal::kSpeakerPin);
+    } else {
+      tone(hal::kSpeakerPin, hz);
+    }
+    lastHz = hz;
+  }
+  if (mask != lastMask) {
+    for (int i = 0; i < 4; i++) {
+      digitalWrite(LED_PINS[i], ((mask >> i) & 1) ? HIGH : LOW);
+    }
+    lastMask = mask;
+  }
+}
+
+// スピーカと全 LED を確実にオフへ（notify のどの終了経路でも最後に呼ぶ）。
+static void notify_silence() {
+  noTone(hal::kSpeakerPin);
+  for (int i = 0; i < 4; i++) {
+    digitalWrite(LED_PINS[i], LOW);
+  }
+}
+
+// notify <boot|goal|error> [sec] | stop
+//   notify boot        : 起動音（上昇4音+LED順増）を1回再生する
+//   notify goal [sec]  : ゴール通知（断続ビープ+全LED点滅）を sec 秒（既定5・上限30）再生する
+//   notify error [sec] : エラー通知（高低交互の警告音+LED交互点滅）を同上
+//   notify stop        : 消音・消灯（万一鳴りっぱなしで残った時の保険）
+// 実飛行では #17 が状態遷移時に notifier::Notifier を start し続ける（ゴールは stop まで無限
+// 繰り返し）。本コマンドは単体確認用のため再生時間を有限に区切り、非改行キーで即中断できる
+// （gotchas B5/B10）。パターン再生列は core/notifier（ホストテスト済）、本関数は結線のみ。
+static int cmd_notify(int argc, char** argv) {
+  if (argc < 2 || argc > 3) {
+    Serial.println("usage: notify <boot|goal|error> [sec] | stop");
+    return -1;
+  }
+
+  // LED は led コマンドと共用のため毎回出力設定してから使う。
+  for (int i = 0; i < 4; i++) {
+    pinMode(LED_PINS[i], OUTPUT);
+  }
+
+  if (strcmp(argv[1], "stop") == 0) {
+    notify_silence();
+    Serial.println("notify stop: 消音・消灯しました");
+    return 0;
+  }
+
+  notifier::Notice notice;
+  if (strcmp(argv[1], "boot") == 0) {
+    notice = notifier::Notice::Boot;
+  } else if (strcmp(argv[1], "goal") == 0) {
+    notice = notifier::Notice::Goal;
+  } else if (strcmp(argv[1], "error") == 0) {
+    notice = notifier::Notice::Error;
+  } else {
+    Serial.println("種別は boot|goal|error|stop");
+    return -1;
+  }
+
+  // 再生時間。1回再生（boot）は完了まで鳴るため秒指定は受け付けない（「秒指定が効く」との
+  // 誤解を防ぐ）。繰り返し（goal/error）は既定5秒・上限30秒で必ず終わる。
+  const int kMaxSec = 30;
+  int sec = 5;
+  if (argc == 3) {
+    if (notice == notifier::Notice::Boot) {
+      Serial.println("boot は1回再生のため sec 指定は不可（goal/error のみ）");
+      return -1;
+    }
+    if (!cli::parseInt(argv[2], sec) || sec < 1 || sec > kMaxSec) {
+      Serial.print("sec は 1-");
+      Serial.print(kMaxSec);
+      Serial.println(" の整数");
+      return -1;
+    }
+  }
+
+  notifier::Notifier player;
+  if (!player.start(notice)) {
+    notify_silence();
+    Serial.println("notify: パターンを開始できませんでした");
+    return -1;
+  }
+  Serial.print("notify ");
+  Serial.print(argv[1]);
+  const notifier::Pattern* pat = notifier::patternFor(notice);  // start 成功済みなので非 null
+  if (pat->repeat) {
+    Serial.print(" を ");
+    Serial.print(sec);
+    Serial.print(" 秒再生します");
+  } else {
+    Serial.print(" を1回再生します");
+  }
+  Serial.println("（中断: 非改行キー）");
+
+  // 約10ms 周期で update→出力適用。実経過[ms]を dt に使う（millis ベース）。
+  // 終了条件: 1回再生の完了 / 再生時間の上限 / 非改行キー中断（gotchas B10: CR/LF は読み飛ばす）。
+  const unsigned long limitMs = static_cast<unsigned long>(sec) * 1000UL;
+  uint16_t lastHz = 0;
+  uint8_t lastMask = 0;
+  unsigned long begin = millis();
+  unsigned long prev = begin;
+  bool aborted = false;
+  while (player.isActive()) {
+    unsigned long now = millis();
+    player.update(static_cast<double>(now - prev));
+    prev = now;
+    if (!player.isActive() || (now - begin >= limitMs)) {
+      break;  // 1回再生の完了 or 再生時間の上限
+    }
+    notify_apply(player.toneHz(), player.ledMask(), lastHz, lastMask);
+    // 次 tick まで最大10ms、キー入力をポーリングしながら待つ。
+    unsigned long start = millis();
+    while (millis() - start < 10) {
+      if (Serial.available()) {
+        int c = Serial.read();
+        if (c >= 0 && c != '\r' && c != '\n') {
+          while (Serial.available()) {
+            Serial.read();
+          }
+          aborted = true;
+          break;
+        }
+      }
+    }
+    if (aborted) {
+      break;
+    }
+  }
+
+  notify_silence();  // 終了保証: どの経路でも必ず消音・消灯する
+  Serial.println(aborted ? "notify: 中断しました（消音・消灯）" : "notify: 完了（消音・消灯）");
   return 0;
 }
 
