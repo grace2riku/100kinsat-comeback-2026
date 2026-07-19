@@ -101,7 +101,9 @@ Detection detect(const uint8_t* uyvy, int width, int height, const Config& cfg) 
     const double centroid = moment / static_cast<double>(pixels);
     best.detected = true;
     best.bearingDeg = columnToBearingDeg(centroid, width, c.hfovDeg);
-    best.centerColumn = static_cast<int>(centroid + 0.5);
+    // 重心が属する列＝切り捨て。centroid は [0.5, width-0.5] に収まるため常に [0, width)。
+    // 四捨五入だと右端単一列（centroid = width-0.5）が width に丸まり契約を破る（Codex P2）。
+    best.centerColumn = static_cast<int>(centroid);
     best.widthColumns = widthColumns;
     best.widthRatio = static_cast<double>(widthColumns) / width;
     best.redPixels = pixels;

@@ -64,7 +64,7 @@ struct Config {
 struct Detection {
   bool detected = false;
   double bearingDeg = 0.0;  // 画角内方位角 [deg]。画像中央=0、右+/左-
-  int centerColumn = -1;    // 選択区間の重心列 [0, width)（四捨五入）
+  int centerColumn = -1;    // 選択区間の重心が属する列 [0, width)（重心の切り捨て）
   int widthColumns = 0;     // 選択区間の幅 [列]
   double widthRatio = 0.0;  // widthColumns / width（近接度指標。近いほど大）
   double confidence = 0.0;  // 区間内赤密度 = redPixels / (widthColumns*height) ∈ [0,1]
