@@ -54,6 +54,7 @@ class SpresenseCamera {
     }
     begun_ = true;
     stillWidth_ = 0;  // still フォーマット未設定
+    stillHeight_ = 0;
     return true;
   }
 
@@ -110,6 +111,7 @@ class SpresenseCamera {
       theCamera.end();
       begun_ = false;
       stillWidth_ = 0;
+      stillHeight_ = 0;
     }
   }
 
@@ -154,22 +156,27 @@ class SpresenseCamera {
       lastErr_ = CAM_ERR_NOT_INITIALIZED;
       return false;
     }
-    if (stillWidth_ == width && stillFmt_ == fmt) {
+    // キャッシュキーは判定に使う全パラメータ（幅・高さ・フォーマット）を含める。
+    // 幅だけで判定すると「同幅・異高さ」の解像度を将来足したとき古い設定を掴む（gotchas B20）。
+    if (stillWidth_ == width && stillHeight_ == height && stillFmt_ == fmt) {
       return true;
     }
     lastErr_ = theCamera.setStillPictureImageFormat(width, height, fmt);
     if (lastErr_ != CAM_ERR_SUCCESS) {
       stillWidth_ = 0;
+      stillHeight_ = 0;
       return false;
     }
     stillWidth_ = width;
+    stillHeight_ = height;
     stillFmt_ = fmt;
     return true;
   }
 
   CamErr lastErr_ = CAM_ERR_SUCCESS;
   bool begun_ = false;
-  int stillWidth_ = 0;  // 0 = still フォーマット未設定
+  int stillWidth_ = 0;   // 0 = still フォーマット未設定
+  int stillHeight_ = 0;  // 同上
   CAM_IMAGE_PIX_FMT stillFmt_ = CAM_IMAGE_PIX_FMT_NONE;
 };
 

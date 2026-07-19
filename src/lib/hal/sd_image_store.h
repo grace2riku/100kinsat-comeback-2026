@@ -38,7 +38,8 @@ class SdImageStore {
 
   // data の len バイトを cam/imgNNN.<ext> の空き番号へ保存する。成功時 true で
   // path() に保存先が入る。data が null・len が 0・空き番号なし・書き込み不足
-  // （SD 満杯/抜け）は false。ext は "jpg"/"yuv" 等の拡張子（ドット無し）。
+  // （SD 満杯/抜け）は false。ext は "jpg"/"yuv" 等の拡張子（ドット無し・3〜4文字前提。
+  // path_ に収まらない長い ext は snprintf で切り詰められ意図しないパスになるため渡さない）。
   bool save(const uint8_t* data, size_t len, const char* ext) {
     path_[0] = '\0';
     if (data == nullptr || len == 0 || ext == nullptr || ext[0] == '\0') {
