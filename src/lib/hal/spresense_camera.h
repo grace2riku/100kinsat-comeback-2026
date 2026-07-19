@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <cstring>
+#include <new>
 
 // spresense_camera.h - Spresense カメラボードの実機ラッパ（hal層, Camera.h 依存）
 //
@@ -85,6 +86,18 @@ class SpresenseCamera {
   // begin() が成功済みか。
   bool ready() const { return begun_; }
 
+  // CamImage ハンドルを安全に「空」へ戻す（保持しているフレーム参照を解放する）。
+  // 注意: `img = CamImage();` の空代入で解放してはならない。Camera ライブラリの
+  // operator=/コピーコンストラクタは RHS の内部ポインタを**無条件に incRef** するため、
+  // 空ハンドル（img_buff==NULL）からの代入は NULL 参照で即クラッシュする
+  // （gotchas B25 / Codex P1）。ここではデストラクタ明示呼び出し＋placement new の
+  // 再構築で解放する（~CamImage は参照解放で NULL 安全、CamImage() は公式ドキュメントに
+  // 「空の CamImage インスタンス」と明記された公開コンストラクタ）。
+  static void releaseImage(CamImage& img) {
+    img.~CamImage();
+    new (&img) CamImage();
+  }
+
   // 屋外（昼光）向けにホワイトバランスを DAYLIGHT 固定にする。失敗時 false。
   // 検出の色閾値を安定させるため cam init から呼ぶ（失敗しても撮像自体は可能）。
   bool setDaylightWhiteBalance() {
@@ -134,7 +147,8 @@ class SpresenseCamera {
     lastErr_ = CAM_ERR_SUCCESS;
     // 旧フレームの参照を先に解放してから撮る（参照が残ると still バッファが再キュー
     // されず、次の takePicture が失敗する。Codex P2 / gotchas B22）。
-    out = CamImage();
+    // 空 CamImage の代入による解放は NULL 参照になるため releaseImage を使う（B25）。
+    releaseImage(out);
     if (!ensureStillFormat(kSnapWidth, kSnapHeight, CAM_IMAGE_PIX_FMT_JPG)) {
       return false;
     }
