@@ -10,9 +10,13 @@
 //     ギャップ連結/散在ノイズ/しきい値境界/不正入力/矛盾 Config
 // 方位角の期待値は hfov=90°・ratio=0.5 → atan(0.5)=26.565051177...° のように
 // 解析的に厳密な値になるよう画像を設計する（手計算の丸めに依存しない）。
-// 実写ダンプ（実機取得）を使った閾値の物理的妥当性は bring-up で確認する範囲外。
+// 末尾に実機 cam dump の実写ダンプ回帰（test/data/camera/、台帳は同 README.md）もある。
+// 屋外での閾値の物理的妥当性の最終確認は bring-up（camera_bringup.md 手順B/C）の範囲。
 
 #include <cmath>
+#include <cstdint>
+#include <fstream>
+#include <string>
 #include <vector>
 
 #include "cone_detect.h"
@@ -438,4 +442,44 @@ TEST_CASE("detect: 不正な Config 数値はクランプ後の値で動く（B1
   c.minRedPixels = 0;
   Detection d = cone::detect(buf.data(), 32, 24, c);
   CHECK_FALSE(d.detected);
+}
+
+// ---- 実写ダンプ回帰（実機 cam dump で取得。台帳: test/data/camera/README.md） ----
+
+namespace {
+
+// test/data/camera/ の UYVY ダンプ（QVGA, 153,600B）を読む。失敗時は空を返す。
+std::vector<uint8_t> loadDump(const char* name) {
+  std::string path = std::string(TEST_DATA_DIR "/camera/") + name;
+  std::ifstream f(path, std::ios::binary);
+  std::vector<uint8_t> buf(static_cast<size_t>(320) * 240 * 2);
+  if (!f.read(reinterpret_cast<char*>(buf.data()), static_cast<std::streamsize>(buf.size()))) {
+    return {};
+  }
+  return buf;
+}
+
+}  // namespace
+
+TEST_CASE(
+    "実写(室内・電球色・コーン無し): WB=DAYLIGHT固定の色転びで既定閾値は全面誤検出する"
+    "（この光条件の既知の性質。屋外昼光が運用前提。camera_bringup.md 手順B）") {
+  auto buf = loadDump("indoor_noCone_room-light_001.yuv");
+  REQUIRE(buf.size() == 320u * 240 * 2);
+  // 実測: V(Cr) 中央値162・画素の59.3%が vMin=160 を超える（2026-07-19 解析）。
+  // 既定閾値では「全幅の赤区間」として誤検出する。この実写での挙動を回帰として固定し、
+  // 既定閾値を調整した際に本ケースの期待が変わることで影響に気づけるようにする。
+  Detection d = cone::detect(buf.data(), 320, 240, Config{});
+  CHECK(d.detected);
+  CHECK(d.widthRatio > 0.9);  // ほぼ全幅を「赤区間」と誤認している
+}
+
+TEST_CASE(
+    "実写(室内・電球色・コーン無し): 室内試験向け vMin=190 なら誤検出しない"
+    "（この画像の V 最大は 188。camera_bringup.md の室内試験時の目安値）") {
+  auto buf = loadDump("indoor_noCone_room-light_001.yuv");
+  REQUIRE(buf.size() == 320u * 240 * 2);
+  Config c;
+  c.vMin = 190;
+  CHECK_FALSE(cone::detect(buf.data(), 320, 240, c).detected);
 }

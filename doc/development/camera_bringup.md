@@ -94,6 +94,12 @@ cam dump        （各条件の実写ダンプを保存）
   茶色・肌色を誤検出するので、誤検出が出ない範囲で調整する
 - 調整後の採用値と条件別の傾向を §3 に記録する
 
+> **室内（電球色照明）で試験する場合の注意**: WB=DAYLIGHT 固定のため画像全体が
+> オレンジに転び、既定閾値では**全面誤検出**する（2026-07-19 実測: V(Cr) 中央値162、
+> 59.3% が vMin=160 超え。`test/data/camera/indoor_noCone_room-light_001.yuv`）。
+> 室内予行では `cam thr 32 235 120 190` を目安にする（この実写の V 最大は 188）。
+> 屋外昼光では WB が一致し背景 Cr は 128 付近に収まるため既定値で運用する想定。
+
 ### 手順D: 処理時間の実測（Phase3 制御周期との整合）
 
 `cam detect` の表示（`capture=...ms detect=...ms`）を10回程度記録し、
@@ -150,7 +156,14 @@ cam init → imu init → gnss init → cam detect → log 5 → cam snap
   （`cam/img000.yuv` **153,600 bytes = QVGA UYVY の期待サイズと一致**）すべて成功。
   ffmpeg（uyvy422 指定）で PNG 変換し、**snap の JPEG・dump の変換画像とも色が自然で
   あることを目視確認 → UYVY バイト順（core cone_detect の前提）は実機で正しいと確定**。
-- 未実施の残項目: 未接続時の `cam init` エラー挙動（手順A）、手順B〜F、§4 の体系保存。
+- **手順Bの室内予行（2026-07-19 夜・電球色照明・コーン無し）**: `cam detect` が
+  detected=1 / width≈320col / conf=0.56〜0.76 と**全面誤検出**。同場面の `cam dump`
+  （`test/data/camera/indoor_noCone_room-light_001.yuv` として台帳管理）を解析し、
+  **WB=DAYLIGHT 固定×電球色照明で全面がオレンジ転び（V 中央値162・59.3%が vMin 超え）**
+  が原因と確定。実写回帰テスト2件（既定閾値で誤検出する性質・vMin=190 で誤検出しない）を
+  `test_cone_detect.cpp` に追加。処理時間の初期実測: capture≈300ms（5fps ストリーミング
+  同期待ち込み）・detect≈37ms。
+- 未実施の残項目: 未接続時の `cam init` エラー挙動（手順A）、屋外での手順B〜F。
 
 （実施日・採用閾値・hfov 実測値・距離別の検出結果・処理時間・光条件の傾向をここに記録する）
 

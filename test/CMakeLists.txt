@@ -28,3 +28,5 @@ add_core_test(test_cone_detect core/test_cone_detect.cpp)
 # motor/separator テストは実機と同じピン定数（src/lib/hal/spresense_pins.h, Arduino非依存）を参照する。
 target_include_directories(test_motor PRIVATE ${CMAKE_SOURCE_DIR}/src/lib/hal)
 target_include_directories(test_separator PRIVATE ${CMAKE_SOURCE_DIR}/src/lib/hal)
+# cone_detect テストは実機で取得した実写ダンプ（test/data/camera/*.yuv）も読む。
+target_compile_definitions(test_cone_detect PRIVATE TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/test/data")
