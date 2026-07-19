@@ -71,10 +71,17 @@ class SpresenseCamera {
     return lastErr_ == CAM_ERR_SUCCESS;
   }
 
-  // 検出用 QVGA YUV422(UYVY) フレームを同期取得する。失敗時 false（out は不変）。
+  // 検出用 QVGA YUV422(UYVY) フレームを同期取得する。失敗時 false。
   // 成功時 out のバッファはライブラリ管理領域で、次の capture まで有効（コピー不要で
   // cone::detect へ渡せる。保持したい場合は呼び出し側でコピーする）。
+  // 注意: still バッファは1面のみで、CamImage の参照が残っている間は再キューされない。
+  // そのため本関数は最初に out の旧フレーム参照を解放する（同じ変数の再利用で連続取得
+  // するループを成立させるため。失敗時も out は無効になる）。out 以外の変数に前の
+  // フレームを保持したまま呼ぶと takePicture が失敗する（同時に保持できるのは1フレーム）。
   bool captureDetectFrame(CamImage& out) {
+    // 旧フレームの参照を先に解放してから撮る（参照が残ると still バッファが再キュー
+    // されず、次の takePicture が失敗する。Codex P2 / gotchas B22）。
+    out = CamImage();
     if (!ensureStillFormat(kDetectWidth, kDetectHeight, CAM_IMAGE_PIX_FMT_YUV422)) {
       return false;
     }
@@ -93,7 +100,9 @@ class SpresenseCamera {
   }
 
   // VGA JPEG を同期取得する（SD 保存は hal::SdImageStore が担当）。失敗時 false。
+  // captureDetectFrame と同じく out の旧フレーム参照を最初に解放する（失敗時 out は無効）。
   bool captureJpeg(CamImage& out) {
+    out = CamImage();  // 旧フレーム解放（1面の still バッファを再キューさせる。B22）
     if (!ensureStillFormat(kSnapWidth, kSnapHeight, CAM_IMAGE_PIX_FMT_JPG)) {
       return false;
     }
