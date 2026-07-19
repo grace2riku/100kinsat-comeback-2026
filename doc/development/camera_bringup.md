@@ -129,7 +129,7 @@ cam init → imu init → gnss init → cam detect → log 5 → cam snap
 
 - [ ] `cam init` が成功し、未接続時はエラー名表示でシェルが固まらない（手順A・B9。接続時の成功は 2026-07-19 確認済み・未接続時が残り）
 - [x] `cam snap` の JPEG が PC で正常に見える（手順A。2026-07-19 確認）
-- [ ] `cam dump` の YUV を uyvy422 として変換し色が正常＝**UYVY バイト順を実機確認**（手順A）
+- [x] `cam dump` の YUV を uyvy422 として変換し色が正常＝**UYVY バイト順を実機確認**（手順A。2026-07-19 確認: core cone_detect の UYVY 前提は正しい）
 - [ ] 赤コーンを距離 1/3/5/10m で検出し、検出可否・bearing・width を記録（手順B）
 - [ ] コーン無し背景で誤検出しない（手順B）
 - [ ] 順光/逆光/日陰の傾向を確認し、採用した閾値を記録（手順C）
@@ -148,10 +148,9 @@ cam init → imu init → gnss init → cam detect → log 5 → cam snap
 - **設計変更後ファーム（2507d96）で手順Aを再確認**: `cam init` / `cam snap`
   （`cam/img001.jpg` 26,720 bytes・拡張子別の独立連番も期待どおり）/ `cam dump`
   （`cam/img000.yuv` **153,600 bytes = QVGA UYVY の期待サイズと一致**）すべて成功。
-  ffmpeg（uyvy422 指定）で PNG 変換も成功。**変換画像の色が自然か（UYVY バイト順の
-  最終確認）の目視確認が残る**。
-- 未実施の残項目: 手順A の変換画像の色確認・未接続時の `cam init` エラー挙動、
-  手順B〜F、§4 の体系保存。
+  ffmpeg（uyvy422 指定）で PNG 変換し、**snap の JPEG・dump の変換画像とも色が自然で
+  あることを目視確認 → UYVY バイト順（core cone_detect の前提）は実機で正しいと確定**。
+- 未実施の残項目: 未接続時の `cam init` エラー挙動（手順A）、手順B〜F、§4 の体系保存。
 
 （実施日・採用閾値・hfov 実測値・距離別の検出結果・処理時間・光条件の傾向をここに記録する）
 
