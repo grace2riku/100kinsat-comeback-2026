@@ -81,6 +81,7 @@ GitHub マイルストーンは **Phase1 環境構築 → Phase2 単体機能の
 - 進め方の正本は **`doc/development/development_workflow.md`**（Issue→ブランチ→TDD→**PR前レビューゲート**→PR）。
 - **PR を出す前に必ず `tools/precheck.sh` を通し、`spresense_gotchas.md` のセルフレビューチェックリストで照合する**。これがレビューの往復を減らす中核。
 - Codex の PR 自動レビューで受けた妥当な指摘は、対応のうえ **`spresense_gotchas.md` に1行追加して資産化**する（同じ不具合を二度とPRに出さない）。
+- **Codex の指摘に対応したら、必ず PR コメントで `@codex review` と書いて明示的に再レビューを依頼**する（指摘→対応コミット＋原因と修正内容の返信→`@codex review` で再依頼、のサイクルを指摘ゼロになるまで回す。push しただけでは再レビューは走らない）。
 
 ## Claude Code 運用方針（MCP / スキル / サブエージェント）
 - **役割分担**: 実装(TDD)とPR前セルフレビューは Claude（メイン会話）、**PR前の独立レビューは `code-reviewer` サブエージェント**（外部依存ゼロの事前批評役）、汎用バグ観点は `/code-review`、PR自動レビューは Codex(GitHub)。詳細は `development_workflow.md` §5-3 / §7。
