@@ -399,6 +399,43 @@ TWELITE STAGE SDK (確認バージョン `MWSTAGE2022_08_30`):
 
 > プログラム本体については [基礎編 chapter 10](https://zenn.dev/ymt117/books/100kinsat-spr-basic/viewer/twelite) は執筆途中のため、TWELITE 公式ドキュメントおよびリポジトリのサンプルを併用すること。
 
+### 5.10 カメラ (Spresense カメラボード) — 専用コネクタ（Issue #52）
+
+赤コーン終端誘導用の撮像・検出モジュール。ハードウェアは `hardware.md` §7「カメラボード」参照。
+
+#### Camera ライブラリ（Spresense Arduino 同梱）
+
+```cpp
+#include <Camera.h>
+
+theCamera.begin(1, CAM_VIDEO_FPS_5, CAM_IMGSIZE_QVGA_H, CAM_IMGSIZE_QVGA_V,
+                CAM_IMAGE_PIX_FMT_YUV422);           // ビデオバッファ1面・QVGA/YUV422
+theCamera.setAutoWhiteBalanceMode(CAM_WHITE_BALANCE_DAYLIGHT);  // 屋外は DAYLIGHT 固定
+theCamera.setStillPictureImageFormat(w, h, fmt);      // takePicture のフォーマット
+CamImage img = theCamera.takePicture();               // 同期取得（失敗時 isAvailable()=false）
+```
+
+- **`CAM_IMAGE_PIX_FMT_YUV422` は `V4L2_PIX_FMT_UYVY`（UYVY バイト順: 2画素4バイト
+  [U0, Y0, V0, Y1]）**。一般的な YUYV とは異なる（取り違えると輝度と色差が入れ替わる）。
+- QVGA/YUV422 のフレームは 320×240×2 = 153,600 bytes。`begin()` がビデオバッファを確保する
+  ため、メモリ共存（GNSS/TWELITE/datalog）は実機で確認する（`camera_bringup.md` 手順F）。
+- `takePicture()` は CamErr を返さない（`CamImage::isAvailable()` で成否判定）。
+  CamErr を返す API のエラー名は `hal::SpresenseCamera::camErrName` で表示できる。
+
+#### 本リポジトリの実装（Issue #52）
+
+| 層 | ファイル | 内容 |
+|---|---|---|
+| core | `src/lib/core/cone_detect.{h,cpp}` | 赤閾値→列ヒストグラム→区間連結→重心/幅/方位角（HW非依存・ホストテスト済） |
+| hal | `src/lib/hal/spresense_camera.h` | Camera ライブラリの薄いラッパ（QVGA YUV 取得 / VGA JPEG / オンデマンド初期化） |
+| hal | `src/lib/hal/sd_image_store.h` | 画像の SD 保存（`cam/imgNNN.<ext>` 空き連番採番） |
+| shell | `cam` コマンド | init / snap / dump / detect / mon / thr（`serial_shell.md`） |
+
+検出出力 I/F（`cone::Detection`）: `detected` / `bearingDeg`（画角内方位角、右+）/
+`widthRatio`（近接度指標）/ `confidence`（区間内赤密度）/ `redPixels`。
+Phase3 のナビ（#18）・ゴール判定（#19）がこの I/F を購読する。
+色閾値・画角の実機校正手順は `doc/development/camera_bringup.md`。
+
 ## 6. 未整備セクション
 
 原典で **「執筆途中」** とされているもの:
