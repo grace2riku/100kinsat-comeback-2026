@@ -46,8 +46,8 @@ class SdImageStore {
     }
     bool found = false;
     for (uint16_t index = 0; index < kMaxImageFiles; ++index) {
-      std::snprintf(path_, sizeof(path_), "%s/img%03u.%s", kImageDir,
-                    static_cast<unsigned>(index), ext);
+      std::snprintf(path_, sizeof(path_), "%s/img%03u.%s", kImageDir, static_cast<unsigned>(index),
+                    ext);
       if (!sd_.exists(path_)) {
         found = true;
         break;

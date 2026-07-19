@@ -34,11 +34,11 @@ namespace hal {
 class SpresenseCamera {
  public:
   // 検出用フレーム寸法（QVGA）。core 側 cone::kMaxDetectWidth/Height と一致する。
-  static constexpr int kDetectWidth = CAM_IMGSIZE_QVGA_H;    // 320
-  static constexpr int kDetectHeight = CAM_IMGSIZE_QVGA_V;   // 240
+  static constexpr int kDetectWidth = CAM_IMGSIZE_QVGA_H;   // 320
+  static constexpr int kDetectHeight = CAM_IMGSIZE_QVGA_V;  // 240
   // スナップ（JPEG）寸法。目視確認・学習データ用途で VGA を使う。
-  static constexpr int kSnapWidth = CAM_IMGSIZE_VGA_H;       // 640
-  static constexpr int kSnapHeight = CAM_IMGSIZE_VGA_V;      // 480
+  static constexpr int kSnapWidth = CAM_IMGSIZE_VGA_H;   // 640
+  static constexpr int kSnapHeight = CAM_IMGSIZE_VGA_V;  // 480
 
   // カメラデバイス初期化。二重呼びは何もせず成功。失敗時 false（lastError 参照）。
   // ビデオストリームは最小構成（バッファ1面・5fps・QVGA/YUV422）で開くだけで、
@@ -47,8 +47,8 @@ class SpresenseCamera {
     if (begun_) {
       return true;
     }
-    lastErr_ = theCamera.begin(1, CAM_VIDEO_FPS_5, kDetectWidth, kDetectHeight,
-                               CAM_IMAGE_PIX_FMT_YUV422);
+    lastErr_ =
+        theCamera.begin(1, CAM_VIDEO_FPS_5, kDetectWidth, kDetectHeight, CAM_IMAGE_PIX_FMT_YUV422);
     if (lastErr_ != CAM_ERR_SUCCESS) {
       return false;
     }
@@ -120,18 +120,30 @@ class SpresenseCamera {
   // CamErr の表示名（シリアルでの実機切り分け用）。
   static const char* camErrName(CamErr err) {
     switch (err) {
-      case CAM_ERR_SUCCESS: return "SUCCESS";
-      case CAM_ERR_NO_DEVICE: return "NO_DEVICE";
-      case CAM_ERR_ILLEGAL_DEVERR: return "ILLEGAL_DEVERR";
-      case CAM_ERR_ALREADY_INITIALIZED: return "ALREADY_INITIALIZED";
-      case CAM_ERR_NOT_INITIALIZED: return "NOT_INITIALIZED";
-      case CAM_ERR_NOT_STILL_INITIALIZED: return "NOT_STILL_INITIALIZED";
-      case CAM_ERR_CANT_CREATE_THREAD: return "CANT_CREATE_THREAD";
-      case CAM_ERR_INVALID_PARAM: return "INVALID_PARAM";
-      case CAM_ERR_NO_MEMORY: return "NO_MEMORY";
-      case CAM_ERR_USR_INUSED: return "USR_INUSED";
-      case CAM_ERR_NOT_PERMITTED: return "NOT_PERMITTED";
-      default: return "UNKNOWN";
+      case CAM_ERR_SUCCESS:
+        return "SUCCESS";
+      case CAM_ERR_NO_DEVICE:
+        return "NO_DEVICE";
+      case CAM_ERR_ILLEGAL_DEVERR:
+        return "ILLEGAL_DEVERR";
+      case CAM_ERR_ALREADY_INITIALIZED:
+        return "ALREADY_INITIALIZED";
+      case CAM_ERR_NOT_INITIALIZED:
+        return "NOT_INITIALIZED";
+      case CAM_ERR_NOT_STILL_INITIALIZED:
+        return "NOT_STILL_INITIALIZED";
+      case CAM_ERR_CANT_CREATE_THREAD:
+        return "CANT_CREATE_THREAD";
+      case CAM_ERR_INVALID_PARAM:
+        return "INVALID_PARAM";
+      case CAM_ERR_NO_MEMORY:
+        return "NO_MEMORY";
+      case CAM_ERR_USR_INUSED:
+        return "USR_INUSED";
+      case CAM_ERR_NOT_PERMITTED:
+        return "NOT_PERMITTED";
+      default:
+        return "UNKNOWN";
     }
   }
 
