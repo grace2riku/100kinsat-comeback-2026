@@ -11,7 +11,7 @@
  *   - 各コマンドの実体（HW依存）: 本スケッチ内のハンドラ
  *
  * コマンド:
- *   - help / led / cds / beep / notify / motor / imu / gnss / land / separate / log は実動作
+ *   - help / led / cds / beep / notify / motor / imu / gnss / land / separate / log / cam は実動作
  *
  * シリアル: 115200 bps
  */
@@ -22,14 +22,17 @@
 #include "bno055.h"
 #include "cli.h"
 #include "compass.h"
+#include "cone_detect.h"
 #include "datalog.h"
 #include "landing.h"
 #include "motor.h"
 #include "notifier.h"
 #include "ntshell.h"
 #include "release_detect.h"
+#include "sd_image_store.h"
 #include "sd_log_sink.h"
 #include "separator.h"
+#include "spresense_camera.h"
 #include "spresense_gnss.h"
 #include "spresense_pins.h"
 extern "C" {
@@ -60,6 +63,15 @@ static release_detect::ReleaseDetector g_release;
 // GNSS（Spresense 内蔵）。begin() で COLD_START、update() でノンブロッキングに最新測位を読む。
 static hal::SpresenseGnss g_gnss;
 
+// カメラ（Spresense カメラボード, 専用コネクタ接続）。begin() はドライバ初期化とバッファ確保
+// （QVGA/YUV422 で約150KB）を伴うため setup() では呼ばず、'cam init' でオンデマンド初期化する
+// （gotchas B9: 起動経路にハングし得るデバイス初期化を置かない）。
+static hal::SpresenseCamera g_camera;
+
+// 赤コーン検出の設定（core/cone_detect）。色閾値は屋外の光条件で 'cam thr' により調整する
+// （camera_bringup.md）。既定値は cone::Config の初期値（QVGA 向け）。
+static cone::Config g_coneCfg;
+
 // ---- コマンドハンドラ（HW依存。0=成功）----
 static int cmd_help(int argc, char** argv);
 static int cmd_led(int argc, char** argv);
@@ -72,6 +84,7 @@ static int cmd_gnss(int argc, char** argv);
 static int cmd_land(int argc, char** argv);
 static int cmd_separate(int argc, char** argv);
 static int cmd_log(int argc, char** argv);
+static int cmd_cam(int argc, char** argv);
 
 static const cli::Command kCommands[] = {
     {"help", "コマンド一覧を表示", cmd_help},
@@ -87,6 +100,8 @@ static const cli::Command kCommands[] = {
     {"separate", "separate [ms|stop] : パラシュート切り離し電熱線(D06)を加熱（安全上限あり・⚠高温注意）",
      cmd_separate},
     {"log", "log [n] : 制御履歴(制御量+操作量)をSDへCSV記録(既定5件・ダミー)", cmd_log},
+    {"cam", "cam <init|snap|dump|detect|mon [n]|thr [yMin yMax uMax vMin]> : カメラ撮像・赤コーン検出",
+     cmd_cam},
 };
 static const int kCommandCount = sizeof(kCommands) / sizeof(kCommands[0]);
 
@@ -1104,6 +1119,226 @@ static int cmd_log(int argc, char** argv) {
   return 0;
 }
 
+// ---- cam（カメラ撮像・赤コーン検出, Issue #52）----
+//
+//   cam init   : カメラ初期化＋ホワイトバランスを DAYLIGHT 固定（オンデマンド。gotchas B9）
+//   cam snap   : VGA JPEG を撮影し SD (cam/imgNNN.jpg) へ保存（目視確認・学習データ用）
+//   cam dump   : QVGA YUV422(UYVY) 生フレームを SD (cam/imgNNN.yuv) へ保存
+//                （ホストテストの実写ダンプ用。PC では ffmpeg -f rawvideo -pix_fmt uyvy422
+//                 -video_size 320x240 -i img000.yuv img000.png で閲覧できる）
+//   cam detect : 1フレーム取得して赤コーン検出結果と処理時間（撮像/検出）を表示
+//   cam mon [n]: 検出を n 回連続表示（既定10・上限1000）。非改行キーで中断（gotchas B10）
+//   cam thr    : 検出の色閾値を表示 / cam thr <yMin> <yMax> <uMax> <vMin> で設定（各0-255）
+//
+// 設計: 検出ロジックは core/cone_detect（合成画像でホストテスト済）。本ハンドラは
+//   hal::SpresenseCamera（撮像）と hal::SdImageStore（SD保存）の薄い呼び出しのみ。
+//   検出結果 I/F（detected/方位角/近接度/信頼度）は Phase3 のナビ(#18)・ゴール判定(#19)が
+//   購読する形をそのまま表示する。閾値・画角の実機校正手順は camera_bringup.md。
+
+// カメラ初期化済みかを検査し、未初期化なら案内を出す。
+static bool cam_require_ready() {
+  if (!g_camera.ready()) {
+    Serial.println("cam: 未初期化です。先に 'cam init' を実行してください");
+    return false;
+  }
+  return true;
+}
+
+// 検出結果を1行で表示する（Phase3 が購読するフィールドをそのまま出す）。
+static void cam_print_detection(const cone::Detection& d) {
+  if (!d.detected) {
+    Serial.println("detected=0 (コーン未検出)");
+    return;
+  }
+  Serial.print("detected=1 bearing=");
+  Serial.print(d.bearingDeg, 1);
+  Serial.print("deg center=");
+  Serial.print(d.centerColumn);
+  Serial.print(" width=");
+  Serial.print(d.widthColumns);
+  Serial.print("col ratio=");
+  Serial.print(d.widthRatio, 3);
+  Serial.print(" conf=");
+  Serial.print(d.confidence, 2);
+  Serial.print(" pixels=");
+  Serial.println(d.redPixels);
+}
+
+// 1フレーム取得→検出→表示。処理時間（撮像/検出）も表示する（Phase3 制御周期との整合確認用）。
+// 戻り値 0=成功（未検出でも撮像・解析が成立すれば成功）。
+static int cam_detect_once() {
+  CamImage img;
+  const unsigned long t0 = micros();
+  if (!g_camera.captureDetectFrame(img)) {
+    Serial.print("cam: フレーム取得失敗 (");
+    Serial.print(g_camera.lastErrorName());
+    Serial.println(") カメラボード接続を確認");
+    return -1;
+  }
+  const unsigned long t1 = micros();
+  const cone::Detection d =
+      cone::detect(img.getImgBuff(), img.getWidth(), img.getHeight(), g_coneCfg);
+  const unsigned long t2 = micros();
+  Serial.print("capture=");
+  Serial.print((t1 - t0) / 1000UL);
+  Serial.print("ms detect=");
+  Serial.print((t2 - t1) / 1000UL);
+  Serial.print("ms | ");
+  cam_print_detection(d);
+  return 0;
+}
+
+// 撮影画像を SD へ保存する（jpeg=true: VGA JPEG / false: QVGA YUV422 生データ）。
+static int cam_save_image(bool jpeg) {
+  CamImage img;
+  const bool ok = jpeg ? g_camera.captureJpeg(img) : g_camera.captureDetectFrame(img);
+  if (!ok) {
+    Serial.print("cam: 撮影失敗 (");
+    Serial.print(g_camera.lastErrorName());
+    Serial.println(") カメラボード接続を確認");
+    return -1;
+  }
+  hal::SdImageStore store;
+  if (!store.begin()) {
+    Serial.println("cam: SD を開けません（カード有無・FAT32 フォーマットを確認）");
+    return -1;
+  }
+  if (!store.save(img.getImgBuff(), img.getImgSize(), jpeg ? "jpg" : "yuv")) {
+    Serial.println("cam: SD 保存失敗（空き番号なし/満杯の可能性。SD を空にして再実行）");
+    return -1;
+  }
+  Serial.print("cam: 保存 ");
+  Serial.print(store.path());
+  Serial.print(" (");
+  Serial.print(img.getImgSize());
+  Serial.println(" bytes)");
+  return 0;
+}
+
+static int cmd_cam(int argc, char** argv) {
+  if (argc == 2 && strcmp(argv[1], "init") == 0) {
+    if (g_camera.ready()) {
+      Serial.println("cam: 初期化済み");
+      return 0;
+    }
+    if (!g_camera.begin()) {
+      Serial.print("cam: 初期化失敗 (");
+      Serial.print(g_camera.lastErrorName());
+      Serial.println(") カメラボードの接続を確認");
+      return -1;
+    }
+    // 屋外の色閾値を安定させるため WB は DAYLIGHT 固定（AWB だと至近の全面赤で色相が
+    // 引っ張られる恐れ）。失敗しても撮像は可能なので警告のみで継続する。
+    if (!g_camera.setDaylightWhiteBalance()) {
+      Serial.print("cam: 警告: WB(DAYLIGHT) 設定失敗 (");
+      Serial.print(g_camera.lastErrorName());
+      Serial.println(") AWB のまま続行");
+    }
+    Serial.println("cam: 初期化完了（QVGA/YUV422, WB=DAYLIGHT）");
+    return 0;
+  }
+
+  if (argc == 2 && strcmp(argv[1], "snap") == 0) {
+    if (!cam_require_ready()) return -1;
+    return cam_save_image(true);
+  }
+
+  if (argc == 2 && strcmp(argv[1], "dump") == 0) {
+    if (!cam_require_ready()) return -1;
+    return cam_save_image(false);
+  }
+
+  if (argc == 2 && strcmp(argv[1], "detect") == 0) {
+    if (!cam_require_ready()) return -1;
+    return cam_detect_once();
+  }
+
+  if ((argc == 2 || argc == 3) && strcmp(argv[1], "mon") == 0) {
+    int count = 10;  // 既定回数
+    if (argc == 3) {
+      if (!cli::parseInt(argv[2], count) || count < 1 || count > 1000) {
+        Serial.println("回数は 1-1000 の整数");
+        return -1;
+      }
+    }
+    if (!cam_require_ready()) return -1;
+    Serial.println("cam mon: 連続検出（中断: 非改行キー）");
+    for (int i = 0; i < count; i++) {
+      Serial.print("[");
+      Serial.print(i + 1);
+      Serial.print("/");
+      Serial.print(count);
+      Serial.print("] ");
+      if (cam_detect_once() != 0) {
+        return -1;  // 撮像失敗が続く状態で回し続けない
+      }
+      // 撮像自体が数百ms かかり自然なペースになるため待ちは入れず、サイクル間で中断キーだけ
+      // 確認する。コマンド確定の残留改行（CRLF の LF）を中断と誤認しないよう CR/LF は
+      // 読み飛ばし、非改行バイトのみを中断トリガーにする（gotchas B10）。
+      bool aborted = false;
+      while (Serial.available()) {
+        int c = Serial.read();
+        if (c >= 0 && c != '\r' && c != '\n') {
+          while (Serial.available()) {
+            Serial.read();  // 残りの入力も読み捨てて中断
+          }
+          aborted = true;
+          break;
+        }
+      }
+      if (aborted) {
+        Serial.println("cam mon: 中断しました");
+        break;
+      }
+    }
+    return 0;
+  }
+
+  if ((argc == 2 || argc == 6) && strcmp(argv[1], "thr") == 0) {
+    if (argc == 6) {
+      // 数値化は厳密パーサで行い（gotchas B1: atoi 禁止）、uint8_t 範囲と
+      // yMin<=yMax の整合を検査してから反映する（B2/B7: 下限・上限の両方）。
+      int vals[4];
+      for (int i = 0; i < 4; i++) {
+        if (!cli::parseInt(argv[2 + i], vals[i]) || vals[i] < 0 || vals[i] > 255) {
+          Serial.println("usage: cam thr <yMin> <yMax> <uMax> <vMin>  (各 0-255)");
+          return -1;
+        }
+      }
+      if (vals[0] > vals[1]) {
+        Serial.println("cam thr: yMin <= yMax にしてください");
+        return -1;
+      }
+      g_coneCfg.yMin = static_cast<uint8_t>(vals[0]);
+      g_coneCfg.yMax = static_cast<uint8_t>(vals[1]);
+      g_coneCfg.uMax = static_cast<uint8_t>(vals[2]);
+      g_coneCfg.vMin = static_cast<uint8_t>(vals[3]);
+    }
+    Serial.print("cam thr: yMin=");
+    Serial.print(g_coneCfg.yMin);
+    Serial.print(" yMax=");
+    Serial.print(g_coneCfg.yMax);
+    Serial.print(" uMax=");
+    Serial.print(g_coneCfg.uMax);
+    Serial.print(" vMin=");
+    Serial.print(g_coneCfg.vMin);
+    Serial.print(" | minCol=");
+    Serial.print(g_coneCfg.minColumnCount);
+    Serial.print(" maxGap=");
+    Serial.print(g_coneCfg.maxGapColumns);
+    Serial.print(" minWidth=");
+    Serial.print(g_coneCfg.minWidthColumns);
+    Serial.print(" minPixels=");
+    Serial.print(g_coneCfg.minRedPixels);
+    Serial.print(" hfov=");
+    Serial.println(g_coneCfg.hfovDeg, 1);
+    return 0;
+  }
+
+  Serial.println("usage: cam <init|snap|dump|detect|mon [n]|thr [yMin yMax uMax vMin]>");
+  return -1;
+}
+
 // NT-Shell が確定した1行をトークン化し、コマンドを実行する。
 static int execute_line(const char* text) {
   static char buf[128];
@@ -1177,6 +1412,8 @@ void setup() {
   Serial.println("imu: 9軸センサ(BNO055)は 'imu init' で初期化してください");
   // GNSS も同様に setup() で測位を待ち切らない（COLD_START は FIX まで数十秒〜数分。gotchas B15）。
   Serial.println("gnss: 内蔵GNSSは 'gnss init' で初期化してください（FIX まで屋外で数十秒〜数分）");
+  // カメラも同様にオンデマンド初期化（ドライバ初期化＋約150KBのバッファ確保を起動経路に置かない）。
+  Serial.println("cam: カメラボードは 'cam init' で初期化してください");
 
   ntshell_init(&ntshell, func_read, func_write, func_callback, (void*)(&ntshell));
   ntshell_set_prompt(&ntshell, PROMPT_STR);
