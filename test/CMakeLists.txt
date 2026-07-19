@@ -24,6 +24,7 @@ add_core_test(test_separator core/test_separator.cpp)
 add_core_test(test_datalog core/test_datalog.cpp)
 add_core_test(test_release_detect core/test_release_detect.cpp)
 add_core_test(test_notifier core/test_notifier.cpp)
+add_core_test(test_cone_detect core/test_cone_detect.cpp)
 # motor/separator テストは実機と同じピン定数（src/lib/hal/spresense_pins.h, Arduino非依存）を参照する。
 target_include_directories(test_motor PRIVATE ${CMAKE_SOURCE_DIR}/src/lib/hal)
 target_include_directories(test_separator PRIVATE ${CMAKE_SOURCE_DIR}/src/lib/hal)
