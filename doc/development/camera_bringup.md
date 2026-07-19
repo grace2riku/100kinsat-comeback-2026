@@ -58,8 +58,9 @@ SD を PC で開き確認:
 - `img*.jpg` が画像ビューアで正常に見える（構図・露出）
 - `img*.yuv` を変換して正常に見える（**UYVY バイト順の実機確認**）:
   ```bash
-  ffmpeg -f rawvideo -pix_fmt uyvy422 -video_size 320x240 -i img000.yuv img000.png
+  ffmpeg -f rawvideo -pix_fmt uyvy422 -video_size 320x240 -i img000.yuv -update 1 -frames:v 1 img000.png
   ```
+  （`-update 1 -frames:v 1` は単発画像出力の指定。無くても PNG は生成されるが警告が出る）
   色が正常なら UYVY 前提は正しい。**緑/紫に化けたらバイト順が異なる**ので
   `cone_detect.h` の前提を修正すること（gotchas A5: フォーマット前提は実機で突き合わせ）。
 
@@ -126,8 +127,8 @@ cam init → imu init → gnss init → cam detect → log 5 → cam snap
 
 > HWモジュールのマージゲート: 下記を実機で確認し日付を記録するまで Issue #52 をクローズしない。
 
-- [ ] `cam init` が成功し、未接続時はエラー名表示でシェルが固まらない（手順A・B9）
-- [ ] `cam snap` の JPEG が PC で正常に見える（手順A）
+- [ ] `cam init` が成功し、未接続時はエラー名表示でシェルが固まらない（手順A・B9。接続時の成功は 2026-07-19 確認済み・未接続時が残り）
+- [x] `cam snap` の JPEG が PC で正常に見える（手順A。2026-07-19 確認）
 - [ ] `cam dump` の YUV を uyvy422 として変換し色が正常＝**UYVY バイト順を実機確認**（手順A）
 - [ ] 赤コーンを距離 1/3/5/10m で検出し、検出可否・bearing・width を記録（手順B）
 - [ ] コーン無し背景で誤検出しない（手順B）
@@ -144,8 +145,13 @@ cam init → imu init → gnss init → cam detect → log 5 → cam snap
   `setStillPictureImageFormat` が SUCCESS を返すのに `takePicture()` が失敗し再現性あり
   （JPEG still は成功するため、**ISX012 は still=JPEG のみ実用**と判断。gotchas B23）。
   → 検出用 YUV フレームを**ビデオストリーミング経由**で取得する方式へ設計変更した。
-  変更後ファームでの手順A（dump の保存と UYVY 確認）は**再確認が必要**。
-- 残項目（手順A の dump 再確認・B〜F・§4）は未実施。
+- **設計変更後ファーム（2507d96）で手順Aを再確認**: `cam init` / `cam snap`
+  （`cam/img001.jpg` 26,720 bytes・拡張子別の独立連番も期待どおり）/ `cam dump`
+  （`cam/img000.yuv` **153,600 bytes = QVGA UYVY の期待サイズと一致**）すべて成功。
+  ffmpeg（uyvy422 指定）で PNG 変換も成功。**変換画像の色が自然か（UYVY バイト順の
+  最終確認）の目視確認が残る**。
+- 未実施の残項目: 手順A の変換画像の色確認・未接続時の `cam init` エラー挙動、
+  手順B〜F、§4 の体系保存。
 
 （実施日・採用閾値・hfov 実測値・距離別の検出結果・処理時間・光条件の傾向をここに記録する）
 
