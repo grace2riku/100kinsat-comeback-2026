@@ -1166,18 +1166,17 @@ static void cam_print_detection(const cone::Detection& d) {
 
 // 1フレーム取得→検出→表示。処理時間（撮像/検出）も表示する（Phase3 制御周期との整合確認用）。
 // 戻り値 0=成功（未検出でも撮像・解析が成立すれば成功）。
+// フレームはビデオストリーミング経由（still の YUV422 は実機で失敗する。gotchas B23）。
 static int cam_detect_once() {
-  CamImage img;
   const unsigned long t0 = micros();
-  if (!g_camera.captureDetectFrame(img)) {
-    Serial.print("cam: フレーム取得失敗 (");
-    Serial.print(g_camera.lastErrorName());
-    Serial.println(") カメラボード接続を確認");
+  const uint8_t* frame = g_camera.captureDetectFrame();
+  if (frame == nullptr) {
+    Serial.println("cam: フレーム取得失敗（ストリーミング応答なし。カメラ接続を確認し cam init からやり直し）");
     return -1;
   }
   const unsigned long t1 = micros();
-  const cone::Detection d =
-      cone::detect(img.getImgBuff(), img.getWidth(), img.getHeight(), g_coneCfg);
+  const cone::Detection d = cone::detect(frame, hal::SpresenseCamera::kDetectWidth,
+                                         hal::SpresenseCamera::kDetectHeight, g_coneCfg);
   const unsigned long t2 = micros();
   Serial.print("capture=");
   Serial.print((t1 - t0) / 1000UL);
@@ -1188,31 +1187,52 @@ static int cam_detect_once() {
   return 0;
 }
 
-// 撮影画像を SD へ保存する（jpeg=true: VGA JPEG / false: QVGA YUV422 生データ）。
-static int cam_save_image(bool jpeg) {
-  CamImage img;
-  const bool ok = jpeg ? g_camera.captureJpeg(img) : g_camera.captureDetectFrame(img);
-  if (!ok) {
-    Serial.print("cam: 撮影失敗 (");
-    Serial.print(g_camera.lastErrorName());
-    Serial.println(") カメラボード接続を確認");
-    return -1;
-  }
+// data の len バイトを SD の cam/imgNNN.<ext> へ保存する共通処理。
+static int cam_store_to_sd(const uint8_t* data, size_t len, const char* ext) {
   hal::SdImageStore store;
   if (!store.begin()) {
     Serial.println("cam: SD を開けません（カード有無・FAT32 フォーマットを確認）");
     return -1;
   }
-  if (!store.save(img.getImgBuff(), img.getImgSize(), jpeg ? "jpg" : "yuv")) {
+  if (!store.save(data, len, ext)) {
     Serial.println("cam: SD 保存失敗（空き番号なし/満杯の可能性。SD を空にして再実行）");
     return -1;
   }
   Serial.print("cam: 保存 ");
   Serial.print(store.path());
   Serial.print(" (");
-  Serial.print(img.getImgSize());
+  Serial.print(len);
   Serial.println(" bytes)");
   return 0;
+}
+
+// cam snap: VGA JPEG を still 撮影して SD へ保存する。
+static int cam_save_snap() {
+  CamImage img;
+  if (!g_camera.captureJpeg(img)) {
+    if (g_camera.lastError() != CAM_ERR_SUCCESS) {
+      Serial.print("cam: 撮影失敗 (");
+      Serial.print(g_camera.lastErrorName());
+      Serial.println(") カメラボード接続を確認");
+    } else {
+      // CamErr を返す API は成功しているのに takePicture が空を返したケース
+      //（still バッファ未解放・デバイス状態異常など）。SUCCESS 表示は紛らわしいので区別する。
+      Serial.println("cam: 撮影失敗（takePicture が空応答。再実行しても続く場合はリセット）");
+    }
+    return -1;
+  }
+  return cam_store_to_sd(img.getImgBuff(), img.getImgSize(), "jpg");
+}
+
+// cam dump: 検出用 QVGA YUV422(UYVY) フレームをストリーミング経由で取得し SD へ保存する
+//（ホストテストの実写ダンプ・学習データ用）。
+static int cam_save_dump() {
+  const uint8_t* frame = g_camera.captureDetectFrame();
+  if (frame == nullptr) {
+    Serial.println("cam: フレーム取得失敗（ストリーミング応答なし。カメラ接続を確認し cam init からやり直し）");
+    return -1;
+  }
+  return cam_store_to_sd(frame, hal::SpresenseCamera::kDetectFrameBytes, "yuv");
 }
 
 static int cmd_cam(int argc, char** argv) {
@@ -1240,12 +1260,12 @@ static int cmd_cam(int argc, char** argv) {
 
   if (argc == 2 && strcmp(argv[1], "snap") == 0) {
     if (!cam_require_ready()) return -1;
-    return cam_save_image(true);
+    return cam_save_snap();
   }
 
   if (argc == 2 && strcmp(argv[1], "dump") == 0) {
     if (!cam_require_ready()) return -1;
-    return cam_save_image(false);
+    return cam_save_dump();
   }
 
   if (argc == 2 && strcmp(argv[1], "detect") == 0) {

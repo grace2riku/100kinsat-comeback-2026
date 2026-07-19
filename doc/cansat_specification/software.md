@@ -411,20 +411,28 @@ TWELITE STAGE SDK (確認バージョン `MWSTAGE2022_08_30`):
 theCamera.begin(1, CAM_VIDEO_FPS_5, CAM_IMGSIZE_QVGA_H, CAM_IMGSIZE_QVGA_V,
                 CAM_IMAGE_PIX_FMT_YUV422);           // ビデオバッファ1面・QVGA/YUV422
 theCamera.setAutoWhiteBalanceMode(CAM_WHITE_BALANCE_DAYLIGHT);  // 屋外は DAYLIGHT 固定
-theCamera.setStillPictureImageFormat(w, h, fmt);      // takePicture のフォーマット
+theCamera.startStreaming(true, camCallback);          // YUV フレームはストリーミングで受ける
+theCamera.setStillPictureImageFormat(w, h, CAM_IMAGE_PIX_FMT_JPG);  // still は JPEG 専用
 CamImage img = theCamera.takePicture();               // 同期取得（失敗時 isAvailable()=false）
 ```
 
 - **`CAM_IMAGE_PIX_FMT_YUV422` は `V4L2_PIX_FMT_UYVY`（UYVY バイト順: 2画素4バイト
   [U0, Y0, V0, Y1]）**。一般的な YUYV とは異なる（取り違えると輝度と色差が入れ替わる）。
-- QVGA/YUV422 のフレームは 320×240×2 = 153,600 bytes。`begin()` がビデオバッファを確保する
-  ため、メモリ共存（GNSS/TWELITE/datalog）は実機で確認する（`camera_bringup.md` 手順F）。
+- **still 撮影（takePicture）は JPEG 専用**。YUV422 を still に指定すると
+  `setStillPictureImageFormat` は SUCCESS を返すのに `takePicture` が失敗する（実機確認
+  2026-07-19）。YUV フレームは公式サンプルと同じく**ビデオストリーミング経由**で取得する
+  （`spresense_gotchas.md` B23。`hal::SpresenseCamera::captureDetectFrame` が同期 I/F に包む）。
+- QVGA/YUV422 のフレームは 320×240×2 = 153,600 bytes。`begin()` のビデオバッファに加え、
+  HAL が検出用コピー先（153,600B, BSS 静的確保）を持つ。**コピー先は `spresense_camera.h` を
+  include するスケッチでは `cam init` を呼ばなくても起動時から常時消費される**点に注意
+  （メモリ見積りに含めること）。メモリ共存（GNSS/TWELITE/datalog）は実機で確認する
+  （`camera_bringup.md` 手順F）。
 - `takePicture()` は CamErr を返さない（`CamImage::isAvailable()` で成否判定）。
   CamErr を返す API のエラー名は `hal::SpresenseCamera::camErrName` で表示できる。
 - still バッファは**1面のみ**で、`CamImage` は参照カウント式（最後の参照が解放されて
-  初めてバッファが再キューされる）。前のフレームを保持したまま `takePicture()` を呼ぶと
-  失敗するため、`hal::SpresenseCamera` の capture は出力変数の旧参照を先に解放する
-  （同時に保持できるのは1フレーム。詳細は `spresense_gotchas.md` B22）。
+  初めてバッファが再キューされる）。前の JPEG を保持したまま `takePicture()` を呼ぶと
+  失敗するため、`hal::SpresenseCamera::captureJpeg` は出力変数の旧参照を先に解放する
+  （同時に保持できるのは1枚。詳細は `spresense_gotchas.md` B22）。
 
 #### 本リポジトリの実装（Issue #52）
 

@@ -97,8 +97,9 @@ cam dump        （各条件の実写ダンプを保存）
 
 `cam detect` の表示（`capture=...ms detect=...ms`）を10回程度記録し、
 撮像＋検出の1サイクル時間の代表値を §3 に記録する。Phase3（#17/#18）の制御周期設計
-（モータ制御・IMU 読みとの共存）への入力になる。takePicture の同期待ちが長すぎる場合は
-ストリーミング化（startStreaming + コールバック）を #18 へ申し送る。
+（モータ制御・IMU 読みとの共存）への入力になる。検出フレームはビデオストリーミング
+（5fps）経由なので capture の待ちは最大でフレーム間隔（約200ms）程度になる想定。
+周期が足りない場合は begin() の fps 引数を上げる判断を #18 へ申し送る。
 
 ### 手順E: 水平画角の校正（方位角の妥当性）
 
@@ -136,7 +137,15 @@ cam init → imu init → gnss init → cam detect → log 5 → cam snap
 - [ ] `cam init` 後に imu/gnss/log/snap が共存動作する（手順F）
 - [ ] 実写ダンプを条件メタデータ付きで保存しリポジトリ管理（§4）
 
-### 実機確認結果（未実施）
+### 実機確認結果（一部実施: 2026-07-19 手順A）
+
+- `cam init` / `cam snap` は成功（`cam/img000.jpg` 27,200 bytes が期待どおりの画像）。
+- 初版実装の `cam dump`（**still 撮影を QVGA/YUV422 で行う方式**）は
+  `setStillPictureImageFormat` が SUCCESS を返すのに `takePicture()` が失敗し再現性あり
+  （JPEG still は成功するため、**ISX012 は still=JPEG のみ実用**と判断。gotchas B23）。
+  → 検出用 YUV フレームを**ビデオストリーミング経由**で取得する方式へ設計変更した。
+  変更後ファームでの手順A（dump の保存と UYVY 確認）は**再確認が必要**。
+- 残項目（手順A の dump 再確認・B〜F・§4）は未実施。
 
 （実施日・採用閾値・hfov 実測値・距離別の検出結果・処理時間・光条件の傾向をここに記録する）
 
